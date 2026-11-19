@@ -21,6 +21,8 @@ Route consumer-only interpretation or threshold work to the originating project.
 
 ## Branch, review, and ship
 
+Before proposing or starting capability work, use the [prior-art index](docs/prior-art/INDEX.md) and include a Prior Art and Reuse Assessment in the proposal and development return. Cite verified implementations and their scope. Identify the smallest needed qualification only when evidence leaves a material gap. Update the index for reviewed capability or evidence changes and keep restricted evidence local.
+
 1. External contributors may fork after launch and branch from reviewed `main` as `issue/<number>-<summary>`. Keep shared changes in the Hantek repository and keep downstream policy in the consumer repository.
 2. Open a pull request linked to the issue. State CLI/schema effects, safety implications, evidence scope and exact offline test outcomes. Put authorized hardware references in a sanitized summary with hashes. CI is offline only.
 3. Maintainers review source rights, evidence safety, the acceptance criteria, schema compatibility and scope of hardware claims. Hardware-sensitive changes need separately authorized qualification. Treat new features as unqualified until explicitly validated and released. Use a non-closing reference while validation or the release is pending.
