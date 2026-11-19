@@ -2,6 +2,8 @@
 
 Use this index before proposing or starting capability development. Begin with the [published v0.1.0 baseline](../releases/V0.1.0_RELEASE_NOTES.md), [current capability matrix](../capabilities/CURRENT.md), and [integration ADR](../adr/0001-cross-project-integration.md). Search the public source, issues, PRs, ADRs, and qualification records for the requested behavior. Review available authorized local archives and fixtures for the same operation and conditions. The index is a starting point for that review.
 
+Repository-relative links follow the branch that contains this index, including source and fixtures from draft PR #3. Use the [immutable v0.1.0 tag](https://github.com/zapawc/hantek-dso5k-control/tree/v0.1.0) to verify released support. The packaged S10 command, its exact-frame S92 classifier, and its transfer schema are DEV-07 draft work. DEV-06A qualified one transfer with the supervised predecessor.
+
 ### Evidence classifications
 
 - **Historical observation** records what an earlier run or operator observed, including incomplete or failed runs.
