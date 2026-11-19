@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from . import __version__
+from ._file_replay import FileReplayError, replay_file
 from ._session import qualify
 from ._settings import settings
 from ._waveform import analyze
@@ -29,6 +30,12 @@ def main(argv=None):
     wave.add_argument("--volts-per-division", type=float, required=True)
     wave.add_argument("--probe-factor", type=float, required=True)
     wave.add_argument("--vertical-position-counts", type=int, required=True)
+    file_replay = offline.add_parser("file-replay", allow_abbrev=False)
+    file_replay.add_argument("input", type=Path)
+    file_replay.add_argument("--filename", required=True)
+    file_replay.add_argument("--expected-bytes", type=int, required=True)
+    file_replay.add_argument("--expected-sha256", required=True)
+    file_replay.add_argument("--output", type=Path, required=True)
     for name, actions in {"device": ["identify"], "settings": ["read"], "clock": ["read", "compare", "sync"],
                           "capture": ["single"]}.items():
         family = cmds.add_parser(name, allow_abbrev=False).add_subparsers(dest="action", required=True)
@@ -54,15 +61,23 @@ def main(argv=None):
             if args.action == "settings":
                 with args.input.open("rb") as handle:
                     output = settings(handle.read(209))
-            else:
+            elif args.action == "waveform":
                 output = analyze(args.input, args.output, args.sample_interval, args.volts_per_division,
                                  args.probe_factor, args.vertical_position_counts)
                 output = {"schema_version": "1.0", **output}
+            else:
+                output = replay_file(args.input, args.output, args.filename, args.expected_bytes,
+                                     args.expected_sha256)
+                output = {"schema_version": "1.0", "command": "offline file-replay", **output}
             code = 0
         else:
             output = {"schema_version": "1.0", "status": "UNAVAILABLE",
                       "command": args.command, "action": getattr(args, "action", None)}
             code = 6
+    except FileReplayError as exc:
+        output = {"schema_version": "1.0", "command": "offline file-replay", "status": "ERROR",
+                  "error": exc.reason, "detail": str(exc)}
+        code = 4
     except (OSError, ValueError) as exc:
         output = {"schema_version": "1.0", "status": "ERROR", "error": type(exc).__name__}
         code = 4

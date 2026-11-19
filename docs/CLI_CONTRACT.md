@@ -5,6 +5,7 @@
 | `hantek --version` | Software version |
 | `hantek qualify readonly --output DIR --confirm-single-client --confirm-settled-history` | Hardware-qualified for the tested Windows batch and qualitative screens. Requires separate hardware approval. DIR must be absent. |
 | `hantek offline settings PATH` | Read and decode a saved 208-byte settings payload |
+| `hantek offline file-replay RX --filename NAME --expected-bytes N --expected-sha256 HEX --output PATH` | Validate a saved native CSV response window and extract the exact bytes. See [DEV-05 replay contract](protocol/NATIVE_CSV_RETRIEVAL.md#cli-and-structured-output). |
 | `hantek offline waveform PATH --output CSV --sample-interval SECONDS --volts-per-division V --probe-factor FACTOR --vertical-position-counts COUNTS` | Parse an existing complete CH1 stream and convert relative coordinates with caller-supplied parameters |
 | `hantek device identify --json`, `hantek settings read --json`, `hantek screenshot --output FILE --metadata FILE` | Reserved. Use the qualified batch entry point for settings and screens after approval. |
 | `hantek clock read --json`, `hantek clock compare --json`, `hantek clock sync --confirm` | Reserved. See the clock plan. |
