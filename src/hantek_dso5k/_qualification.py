@@ -6,6 +6,7 @@ from ._framing import frame
 from ._replies import Reply, observe
 from ._graphics import READ_BYTES
 from ._settings import compare_settings
+from ._winusb import ClaimedBulkIO
 
 WINDOW = 12.0
 GUARD = 0.550
@@ -24,27 +25,24 @@ STEPS = (
     ("final", SETTINGS, 0x81, 220),
 )
 
-class ClaimedLinkIO:
+class ClaimedLinkIO(ClaimedBulkIO):
     """Bind a previously validated and externally claimed transport link."""
 
     def __init__(self, link):
-        self.link = link
+        super().__init__(link)
         self.next_step = 0
 
     def read(self, size, *, timeout_ms):
         if size != READ_BYTES or not 1 <= timeout_ms <= 250:
             raise Stop("read outside the reviewed bounds")
-        try:
-            return bytes(self.link.device.read(0x81, size, timeout=timeout_ms))
-        except self.link.timeout_error as exc:
-            raise TimeoutError from exc
+        return super().read(size, timeout_ms=timeout_ms)
 
     def write(self, request):
         if self.next_step >= len(STEPS) or request != STEPS[self.next_step][1]:
             raise Stop("write outside the reviewed sequence")
         slot = self.next_step
         self.next_step = len(STEPS)
-        written = self.link.device.write(0x02, request, timeout=2000)
+        written = super().write(request)
         if written == len(request):
             self.next_step = slot + 1
         return written

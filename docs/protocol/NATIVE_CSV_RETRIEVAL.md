@@ -1,5 +1,7 @@
 # DEV-05 native CSV retrieval investigation
 
+This report records DEV-05's historical decision. The [DEV-07 CLI contract](NATIVE_CSV_CLI.md) documents the subsequent DEV-06A qualification and the narrower packaged integration.
+
 **Recommendation.** Keep native SINGLE and Save/Recall operator-controlled. Qualify retrieval of one finished front-drive CSV before implementing a live CLI operation. Keep S02 on HOLD. Two historical S10 replies reconstructed correctly; the observed byte streams do not establish clean ownership, a quiet full response window, frozen-record retention during rear-USB retrieval, or behavior on disconnect.
 
 ## S10 evidence matrix

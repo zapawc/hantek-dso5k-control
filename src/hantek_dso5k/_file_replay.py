@@ -80,11 +80,24 @@ def replay_file(source, destination, filename, expected_bytes, expected_sha256):
     with source.open("rb") as handle:
         wire = handle.read(MAX_RX_BYTES + 1)
     data, metadata = decode_file_reply(wire, expected_bytes, expected_sha256)
+    publish_file(destination, data, metadata["sha256"])
+    return {"status": "PASS", "filename_reference": filename, "output_path": str(destination),
+            "rx_bytes": len(wire), "expected_bytes": expected_bytes, **metadata}
+
+
+def publish_file(destination, data, expected_sha256):
+    """Verify a staged local file before publishing it without replacement."""
     if destination.exists() or destination.is_symlink():
         raise FileReplayError("destination_exists", "destination must be absent")
     with TemporaryDirectory(prefix=".hantek-replay-", dir=destination.parent) as scratch:
         staged = Path(scratch) / "payload"
-        staged.write_bytes(data)
+        with staged.open("xb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        staged_data = staged.read_bytes()
+        if len(staged_data) != len(data) or sha256(staged_data).hexdigest() != expected_sha256:
+            raise FileReplayError("staging_mismatch", "staged bytes failed verification")
         try:
             if os.name == "nt":
                 os.rename(staged, destination)
@@ -92,5 +105,3 @@ def replay_file(source, destination, filename, expected_bytes, expected_sha256):
                 os.link(staged, destination)
         except FileExistsError as exc:
             raise FileReplayError("destination_exists", "destination must be absent") from exc
-    return {"status": "PASS", "filename_reference": filename, "output_path": str(destination),
-            "rx_bytes": len(wire), "expected_bytes": expected_bytes, **metadata}
