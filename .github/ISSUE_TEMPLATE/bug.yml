@@ -1,0 +1,81 @@
+name: "Bug"
+description: "Report a reproducible shared CLI, schema, or transport defect."
+title: "[Bug] "
+labels: ["type:bug", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe why the behavior differs from the documented contract. Exit 5 alone is expected for classified anomalies.
+        Public issues and attachments can be visible to anyone. Post only approved synthetic or redacted excerpts. Never post raw instrument captures, credentials, private project details, personal identifiers, or proprietary evidence. Complete each field or explain why it does not apply.
+  - type: input
+    id: originating-project
+    attributes:
+      label: "Originating project"
+      description: "Give an approved public project name or opaque alias. Include a downstream link only when cleared for public disclosure."
+    validations:
+      required: true
+  - type: input
+    id: pinned-hantek
+    attributes:
+      label: "Pinned Hantek version"
+      description: "Include CLI version, full commit SHA or verified wheel SHA-256, and the capture schema version. Use 'none yet' for a proposal."
+    validations:
+      required: true
+  - type: input
+    id: instrument-identity
+    attributes:
+      label: "Instrument identity and host"
+      description: "Provide model, firmware if independently known, OS, driver/backend, and relevant connection context. Omit serial numbers and host identifiers."
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: "Expected behavior"
+      description: "State the expected CLI, schema, or instrument behavior and the basis for that expectation."
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: "Actual behavior"
+      description: "Give the observed exit code, primary reply status, strict session status and relevant differences. For proposals, state the current limitation."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Reproduction steps"
+      description: "Give the shortest safe sequence, expected prerequisites, and frequency. Use offline replay when available. Say 'not yet reproduced' if applicable."
+    validations:
+      required: true
+  - type: textarea
+    id: cli-commands
+    attributes:
+      label: "Exact CLI commands"
+      description: "Paste the commands as executed with consistent redactions. For a proposal, say 'none executed' and label any proposed invocation."
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "Evidence and references"
+      description: "Provide synthetic or reviewed redacted results and cleared links. Keep raw logs, captures, device backups and secrets local."
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: "Safety implications"
+      description: "Describe potential writes, state changes, ambiguity, timeouts, restoration, and approval or stop gates. Say 'offline only' where applicable."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: "Acceptance criteria"
+      description: "List observable pass/fail conditions, validation scope, and how uncertainty or non-reproducibility should be reported."
+    validations:
+      required: true

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hantek-dso5k-control"
+version = "0.1.0"
+description = "Read-only qualification and offline analysis for the original Hantek DSO5102P"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+winusb = ["pyusb==1.3.1", "libusb-package==1.0.30.1", "importlib_resources==7.1.0"]
+
+[project.scripts]
+hantek = "hantek_dso5k.cli:main"
+
+[tool.setuptools]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+
+[tool.setuptools.package-data]
+hantek_dso5k = ["*.ps1"]

@@ -1,0 +1,5 @@
+# Clock API and synchronization plan
+
+Keep the HANTEK-GIT-01 command names and independent approval gates. FW-CAP-02 observed a valid seven-byte UTC reply from the original firmware and a large host/device offset. A future read command should validate a seven-byte calendar reply for the one reviewed request. A read-only comparison records host UTC immediately before and after, monotonic round trip, host clock quality, device resolution and offset uncertainty. Compare using the host interval and include one-second device quantization and unknown latency asymmetry. Report offset separately from sample time and trigger origin.
+
+The archived ARM setter consumes LE16 year with month, day, hour, minute and second and reaches system-time and RTC writes. Range, error behavior, persistent consequences and independent readback must be reviewed before a separately approved sync operation. Keep `clock sync --confirm` isolated from qualify, capture and connect. The current CLI returns unavailable for all clock operations. Installation and testing never interact with the RTC.

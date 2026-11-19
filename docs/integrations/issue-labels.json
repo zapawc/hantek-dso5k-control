@@ -1,0 +1,92 @@
+[
+  {
+    "name": "type:bug",
+    "color": "1D76DB",
+    "description": "Report a reproducible shared CLI, schema, or transport defect."
+  },
+  {
+    "name": "type:feature",
+    "color": "1D76DB",
+    "description": "Request an instrument-level capability or CLI improvement."
+  },
+  {
+    "name": "type:protocol-investigation",
+    "color": "1D76DB",
+    "description": "Ask for an evidence-backed firmware or protocol investigation."
+  },
+  {
+    "name": "type:hardware-qualification",
+    "color": "1D76DB",
+    "description": "Propose or report a bounded, separately authorized device test."
+  },
+  {
+    "name": "type:consumer-integration",
+    "color": "1D76DB",
+    "description": "Request a shared capability needed by a downstream project."
+  },
+  {
+    "name": "priority:p0",
+    "color": "B60205",
+    "description": "Confirmed safety or data-integrity release blocker"
+  },
+  {
+    "name": "priority:p1",
+    "color": "D93F0B",
+    "description": "High-impact regression or blocked validated workflow"
+  },
+  {
+    "name": "priority:p2",
+    "color": "FBCA04",
+    "description": "Normal scheduled improvement"
+  },
+  {
+    "name": "priority:p3",
+    "color": "0E8A16",
+    "description": "Low-impact or exploratory work"
+  },
+  {
+    "name": "maturity:unqualified",
+    "color": "5319E7",
+    "description": "Requested or hypothesized capability"
+  },
+  {
+    "name": "maturity:offline-tested",
+    "color": "5319E7",
+    "description": "Verified using offline tests or replay"
+  },
+  {
+    "name": "maturity:hardware-qualified",
+    "color": "5319E7",
+    "description": "Validated for a documented device and scope"
+  },
+  {
+    "name": "status:triage",
+    "color": "0052CC",
+    "description": "Awaiting classification and ownership"
+  },
+  {
+    "name": "status:needs-evidence",
+    "color": "0052CC",
+    "description": "Awaiting specific evidence or clarification"
+  },
+  {
+    "name": "status:ready",
+    "color": "0052CC",
+    "description": "Scoped with acceptance criteria and an owner"
+  },
+  {
+    "name": "status:in-progress",
+    "color": "0052CC",
+    "description": "Work underway"
+  },
+  {
+    "name": "status:blocked",
+    "color": "0052CC",
+    "description": "Awaiting approval, dependency or access"
+  },
+  {
+    "name": "status:in-review",
+    "color": "0052CC",
+    "description": "Pull request or evidence awaiting review"
+  }
+]

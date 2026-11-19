@@ -1,0 +1,540 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hantek read-only qualification manifest v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "software_version",
+    "source_commit",
+    "run_id",
+    "start_utc",
+    "end_utc",
+    "device",
+    "host",
+    "exit_code",
+    "strict_session",
+    "sequence_complete",
+    "request_attempts",
+    "retries",
+    "settings_comparison",
+    "steps",
+    "trigger_state_evidence",
+    "waveforms",
+    "shared_acquisition",
+    "trigger_time_origin",
+    "artifacts",
+    "error"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "software_version": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "start_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "end_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "device": {
+      "type": "object",
+      "required": [
+        "vid_pid",
+        "model",
+        "firmware_baseline",
+        "firmware_verified_live",
+        "interface_claimed",
+        "interface_released",
+        "clock"
+      ],
+      "properties": {
+        "vid_pid": {
+          "const": "049F:505A"
+        },
+        "model": {
+          "type": "string"
+        },
+        "firmware_baseline": {
+          "type": "string"
+        },
+        "firmware_verified_live": {
+          "const": false
+        },
+        "interface_claimed": {
+          "type": "boolean"
+        },
+        "interface_released": {
+          "type": "boolean"
+        },
+        "clock": {
+          "type": "null"
+        }
+      }
+    },
+    "host": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "exit_code": {
+      "enum": [
+        0,
+        3,
+        4,
+        5
+      ]
+    },
+    "strict_session": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "NOT RUN"
+      ]
+    },
+    "sequence_complete": {
+      "type": "boolean"
+    },
+    "request_attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4
+    },
+    "retries": {
+      "const": 0
+    },
+    "settings_comparison": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "volatile_changes",
+        "configuration_or_unclassified_changes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "volatile_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "field",
+              "range_start_inclusive_end_exclusive",
+              "initial_hex",
+              "final_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "field_000",
+                  "field_001",
+                  "field_002",
+                  "field_003",
+                  "field_004",
+                  "field_005",
+                  "field_006",
+                  "field_007",
+                  "field_008",
+                  "field_010",
+                  "field_011",
+                  "field_012",
+                  "field_013",
+                  "field_014",
+                  "field_015",
+                  "field_016",
+                  "field_017",
+                  "field_018",
+                  "field_020",
+                  "field_021",
+                  "field_022",
+                  "field_023",
+                  "field_024",
+                  "field_025",
+                  "field_027",
+                  "field_035",
+                  "field_043",
+                  "field_051",
+                  "field_059",
+                  "field_060",
+                  "field_061",
+                  "field_062",
+                  "field_063",
+                  "field_065",
+                  "field_066",
+                  "field_067",
+                  "field_075",
+                  "field_076",
+                  "field_077",
+                  "field_078",
+                  "field_080",
+                  "field_082",
+                  "field_090",
+                  "field_091",
+                  "field_092",
+                  "field_093",
+                  "field_094",
+                  "field_095",
+                  "field_096",
+                  "field_097",
+                  "field_099",
+                  "field_100",
+                  "field_101",
+                  "field_102",
+                  "field_103",
+                  "field_104",
+                  "field_105",
+                  "field_107",
+                  "field_109",
+                  "field_117",
+                  "field_118",
+                  "field_119",
+                  "field_120",
+                  "field_121",
+                  "field_122",
+                  "field_123",
+                  "field_124",
+                  "field_126",
+                  "field_127",
+                  "field_128",
+                  "field_136",
+                  "field_137",
+                  "field_138",
+                  "field_139",
+                  "field_141",
+                  "field_143",
+                  "field_151",
+                  "field_152",
+                  "field_160",
+                  "field_161",
+                  "field_162",
+                  "field_163",
+                  "field_171",
+                  "field_172",
+                  "field_173",
+                  "field_174",
+                  "field_175",
+                  "field_176",
+                  "field_177",
+                  "field_178",
+                  "field_179",
+                  "field_180",
+                  "field_181",
+                  "field_182",
+                  "field_183",
+                  "field_184",
+                  "field_185",
+                  "field_186",
+                  "field_187",
+                  "field_188",
+                  "field_189",
+                  "field_190",
+                  "field_191",
+                  "field_192",
+                  "field_193",
+                  "field_194",
+                  "field_195",
+                  "field_196",
+                  "field_197",
+                  "field_198",
+                  "field_199",
+                  "field_200",
+                  "field_201",
+                  "field_202",
+                  "field_203",
+                  "field_204",
+                  "field_205",
+                  "field_206",
+                  "field_207"
+                ]
+              },
+              "range_start_inclusive_end_exclusive": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 208
+                }
+              },
+              "initial_hex": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{2}){1,8}$"
+              },
+              "final_hex": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{2}){1,8}$"
+              }
+            }
+          }
+        },
+        "configuration_or_unclassified_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "field",
+              "range_start_inclusive_end_exclusive",
+              "initial_hex",
+              "final_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "field_000",
+                  "field_001",
+                  "field_002",
+                  "field_003",
+                  "field_004",
+                  "field_005",
+                  "field_006",
+                  "field_007",
+                  "field_008",
+                  "field_010",
+                  "field_011",
+                  "field_012",
+                  "field_013",
+                  "field_014",
+                  "field_015",
+                  "field_016",
+                  "field_017",
+                  "field_018",
+                  "field_020",
+                  "field_021",
+                  "field_022",
+                  "field_023",
+                  "field_024",
+                  "field_025",
+                  "field_027",
+                  "field_035",
+                  "field_043",
+                  "field_051",
+                  "field_059",
+                  "field_060",
+                  "field_061",
+                  "field_062",
+                  "field_063",
+                  "field_065",
+                  "field_066",
+                  "field_067",
+                  "field_075",
+                  "field_076",
+                  "field_077",
+                  "field_078",
+                  "field_080",
+                  "field_082",
+                  "field_090",
+                  "field_091",
+                  "field_092",
+                  "field_093",
+                  "field_094",
+                  "field_095",
+                  "field_096",
+                  "field_097",
+                  "field_099",
+                  "field_100",
+                  "field_101",
+                  "field_102",
+                  "field_103",
+                  "field_104",
+                  "field_105",
+                  "field_107",
+                  "field_109",
+                  "field_117",
+                  "field_118",
+                  "field_119",
+                  "field_120",
+                  "field_121",
+                  "field_122",
+                  "field_123",
+                  "field_124",
+                  "field_126",
+                  "field_127",
+                  "field_128",
+                  "field_136",
+                  "field_137",
+                  "field_138",
+                  "field_139",
+                  "field_141",
+                  "field_143",
+                  "field_151",
+                  "field_152",
+                  "field_160",
+                  "field_161",
+                  "field_162",
+                  "field_163",
+                  "field_171",
+                  "field_172",
+                  "field_173",
+                  "field_174",
+                  "field_175",
+                  "field_176",
+                  "field_177",
+                  "field_178",
+                  "field_179",
+                  "field_180",
+                  "field_181",
+                  "field_182",
+                  "field_183",
+                  "field_184",
+                  "field_185",
+                  "field_186",
+                  "field_187",
+                  "field_188",
+                  "field_189",
+                  "field_190",
+                  "field_191",
+                  "field_192",
+                  "field_193",
+                  "field_194",
+                  "field_195",
+                  "field_196",
+                  "field_197",
+                  "field_198",
+                  "field_199",
+                  "field_200",
+                  "field_201",
+                  "field_202",
+                  "field_203",
+                  "field_204",
+                  "field_205",
+                  "field_206",
+                  "field_207"
+                ]
+              },
+              "range_start_inclusive_end_exclusive": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 208
+                }
+              },
+              "initial_hex": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{2}){1,8}$"
+              },
+              "final_hex": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{2}){1,8}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "transport",
+          "reply",
+          "strict"
+        ],
+        "properties": {
+          "name": {
+            "enum": [
+              "baseline",
+              "screen_first",
+              "screen_second",
+              "final"
+            ]
+          },
+          "transport": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "reply": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "strict": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "trigger_state_evidence": {
+      "type": "null"
+    },
+    "waveforms": {
+      "type": "object",
+      "required": [
+        "CH1",
+        "CH2"
+      ],
+      "properties": {
+        "CH1": {
+          "type": "null"
+        },
+        "CH2": {
+          "type": "null"
+        }
+      }
+    },
+    "shared_acquisition": {
+      "type": "null"
+    },
+    "trigger_time_origin": {
+      "type": "null"
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "bytes",
+          "sha256"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

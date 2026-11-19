@@ -1,0 +1,4 @@
+# Upstream packages. Use the Windows x64 wheel for libusb-package.
+pyusb==1.3.1 --hash=sha256:bf9b754557af4717fe80c2b07cc2b923a9151f5c08d17bdb5345dac09d6a0430
+libusb-package==1.0.30.1 --hash=sha256:57ed575796016854a85fb6e58a6735e26b166c46a98a6bd2d636caae98638a68
+importlib_resources==7.1.0 --hash=sha256:1bd7b48b4088eddb2cd16382150bb515af0bd2c70128194392725f82ad2c96a1

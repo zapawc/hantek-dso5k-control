@@ -1,0 +1,26 @@
+name: Offline tests
+"on": [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  offline:
+    name: Offline Python regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Run offline suite with no USB dependencies
+        run: PYTHONPATH=src python3 -B tests/run_offline.py
+  windows:
+    name: Offline Windows PowerShell regressions
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Parse the host helper and run offline tests
+        shell: powershell
+        run: .\tests\Invoke-OfflineTests.ps1 -Repository . -Python (Get-Command python.exe -ErrorAction Stop).Source
