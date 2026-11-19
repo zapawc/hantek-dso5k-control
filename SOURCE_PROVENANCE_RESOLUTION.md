@@ -2,13 +2,13 @@
 
 ## Operator-developed host code
 
-The package traces to local host automation, synthetic fixtures, independently implemented framing and checksums, and observed protocol compatibility. The operator must confirm rights to the Python and PowerShell implementations before applying MIT. Git metadata and overlap scans alone cannot establish that authority.
+The package traces to local host automation, synthetic fixtures, independently implemented framing and checksums, and observed protocol compatibility. The operator approved MIT for the retained project code with the copyright notice in LICENSE. The audit verifies provenance and exclusions from available records. Git metadata and overlap scans cannot independently establish legal title.
 
 ## Vendor-derived settings vocabulary and layout
 
 The local precursor used a vendor-derived settings vocabulary. This public snapshot retains the observed widths, byte boundaries and signed decoding and generates its own offset identifiers. The snapshot contains no predecessor commits, legacy identifier aliases, or name crosswalk. Functional measurements were checked against the local decoder and preserved replies. [Settings migration](docs/SETTINGS_V2.md)
 
-Only the sanitized root and its reviewed descendants are eligible for future publication. The local precursor, its ancestors, and original artifacts stay local. Approval of the replacement names and rights to distribute the retained host code are still required. Rebuild the assets and refresh every pin after license-holder or other source changes.
+Only the sanitized root and its reviewed descendants are eligible for future publication. The local precursor, its ancestors, and original artifacts stay local. The operator approved the normalized settings schema. Rebuild the assets and refresh every pin after source changes.
 
 ## Community references
 

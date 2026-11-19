@@ -1,6 +1,6 @@
-# License recommendation · MIT proposed
+# License decision · MIT
 
-MIT is the recommended license for the project's original host tooling and documentation once the rights holder approves the exact source and identifies the proper copyright holder. It is short, standard, permits modification and redistribution including commercial use, and retains the copyright and permission notices. Noncommercial project intent belongs in project priorities. It need not restrict commercial use. [OSI MIT license](https://opensource.org/license/mit)
+The operator selected MIT for the project's original host tooling and documentation. It permits modification, redistribution and commercial use with notice retention. [OSI MIT license](https://opensource.org/license/mit)
 
 | Decision factor | MIT | Apache-2.0 |
 | --- | --- | --- |
@@ -12,4 +12,4 @@ MIT is the recommended license for the project's original host tooling and docum
 
 Neither choice clears the vendor-derived table or re-licenses separately installed dependencies. MIT fits the current goal unless the owner identifies a specific need for Apache's patent terms. If Apache is selected later, preserve the original MIT notice for any covered community material. [Apache License 2.0, §§2–6](https://www.apache.org/licenses/LICENSE-2.0) · [Provenance resolution](SOURCE_PROVENANCE_RESOLUTION.md)
 
-The root [proposed LICENSE](LICENSE) contains canonical MIT terms with a copyright placeholder. Package metadata does not declare an active project license. After rights-holder approval, replace the placeholder, set approved package license metadata, then build and audit a fresh immutable candidate. This proposal applies no outbound grant on behalf of the operator.
+The root [LICENSE](LICENSE) contains the standard MIT terms and approved copyright notice. The [community attribution](THIRD_PARTY_NOTICES.md) is retained separately.

@@ -14,7 +14,7 @@ List offline commands and results. Link approved sanitized hardware evidence whe
 
 ## Contribution rights
 
-Confirm authority to submit the patch under the approved project license. Disclose third-party material, exact upstream source and applicable notices. Use approved public references and synthetic or reviewed redacted examples only. Keep raw captures, credentials and private project details out of the PR.
+Confirm authority to submit the patch under the project's MIT license. Disclose third-party material, exact upstream source and applicable notices. Use approved public references and synthetic or reviewed redacted examples only. Keep raw captures, credentials and private project details out of the PR.
 
 ## Delivery
 

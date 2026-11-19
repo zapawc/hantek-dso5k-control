@@ -13,4 +13,4 @@ Consumers pin an immutable commit SHA or verified release artifact digest. A tag
 
 Use the [consumer guide](HANTEK_INTEGRATION.md) and [contribution workflow](CONTRIBUTING.md) for cross-project changes. See the [settings migration guide](docs/SETTINGS_V2.md) and [publication gates](OPEN_SOURCE_READINESS.md).
 
-The proposed open-source license is pending owner approval. See the [open-source review](OPEN_SOURCE_READINESS.md) for current publication gates.
+The source is licensed under [MIT](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) and the [open-source review](OPEN_SOURCE_READINESS.md).

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Read-only qualification and offline analysis for the original Hantek DSO5102P"
 readme = "README.md"
 requires-python = ">=3.10"
+license = {text = "MIT"}
 dependencies = []
 
 [project.optional-dependencies]

@@ -1,6 +1,6 @@
 # License and third-party provenance review
 
-The root MIT text has an unresolved copyright placeholder. Package metadata declares no active project license. The new snapshot has neutral field IDs. Confirm source rights and approved terms before publication. [Provenance review](../../SOURCE_PROVENANCE_RESOLUTION.md)
+The project uses the MIT license and identifies it in the package metadata. The public settings snapshot uses neutral field IDs. The community notice is retained with the source and wheel. Upstream dependencies keep their own terms. [Provenance review](../../SOURCE_PROVENANCE_RESOLUTION.md)
 
 | Component | Scope and observed license | Handling for preview |
 | --- | --- | --- |

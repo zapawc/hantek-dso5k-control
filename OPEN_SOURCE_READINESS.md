@@ -1,15 +1,13 @@
 # Open-source readiness
 
-**NO-GO for public publication. MIT is preferred and pending.** No public repository, push, tag, settings change, access grant, or device operation is authorized. The off-repository publication manifest identifies one exact local review candidate and its files, commits and asset digests. It is a blocked candidate. The public upload list remains empty until the operator clears rights and grants explicit publication authorization.
+**Local release prepared. Public publication remains pending authorization.** The operator selected MIT, approved the copyright notice, and retained the normalized settings schema. No public repository, push, tag, settings change, access grant, or device operation is authorized. The off-repository publication manifest identifies the exact release candidate, its commits and asset digests.
 
 The existing hardware qualification supports Windows discovery through the guarded path, read-only settings, qualitative screenshots, structured evidence, and caller-parameterized offline conversion. Successful primary responses and strict FAIL/exit 5 remain separate. Trigger and SINGLE control, live waveform coherence, power-startup automation, restoration and clock changes remain unqualified.
 
 ## Approval gates
 
-1. Confirm authority, copyright holder and year for the intended license. Resolve employment, client or contributor rights and licensing claims.
-2. Approve the isolated sanitized root and schema transition. Keep the canonical local ancestry out of the public repository. Confirm community attribution and any further material requiring permission.
-3. Finalize project license and approved package metadata. Rebuild from the approved source, re-audit reachable history and release assets, and refresh the exact immutable publication manifest and consumer pin.
-4. Confirm public Issues and PR moderation, offline CI, approved release scope and exact GitHub destination. Grant public-publication authorization separately. No invite or actual upload follows from this document.
+1. Review the final manifest, approved MIT text, sanitized history and release asset digests. Keep the canonical local ancestry and private evidence outside the public repository.
+2. Review public Issues and PR moderation, offline CI and release scope. Grant publication authorization separately for the exact destination, commit, tag and assets.
 
 ## Public issue safety
 

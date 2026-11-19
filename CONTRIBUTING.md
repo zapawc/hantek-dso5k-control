@@ -29,7 +29,7 @@ Route consumer-only interpretation or threshold work to the originating project.
 
 ## Contributor licensing
 
-The project license is pending. External contributions open only after the owner approves the final terms. By submitting a patch for inclusion after activation, state that you have authority to contribute it on the approved project terms. Identify third-party material and its exact source and compatibility, and retain required notices. Maintainers may require changes or decline a submission whose rights cannot be verified. Issue discussion alone grants no permission to reuse proprietary code, and no separate CLA or DCO is adopted by this draft.
+After the repository opens, confirm you have authority to submit your contribution under the [MIT license](LICENSE). Identify third-party material, its exact source, and applicable terms. Retain required notices. Maintainers may require changes or decline a submission whose rights cannot be verified. Issue discussion alone grants no permission to reuse proprietary code. The project uses the contribution statement in the pull request template.
 
 Consumers must pin an approved immutable Git commit or verified release artifact digest. They deliberately review their own dependency upgrades and never automatically follow `main`.
 
