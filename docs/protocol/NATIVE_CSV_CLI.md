@@ -1,6 +1,6 @@
-# Native CSV retrieval in the DEV-07 draft
+# Native CSV retrieval — integrated v0.2.0 candidate
 
-The Windows CLI retrieves one completed, previously exported CSV. Capture, freeze and export remain operator actions. The command is gated to `/mnt/udisk/WaveData163.csv` and the 89,566-byte profile on the original 2015 DSO5102P. The DEV-06A supervised runner qualified one such transfer. The DEV-07 packaged CLI passed a separately authorized, bounded CH1 hardware retrieval on 2026-11-20 UTC. This draft functionality is not yet released; future hardware activity still requires approval. See [qualification record](NATIVE_CSV_QUALIFICATION.md#dev-07-packaged-cli--completed-qualification-2026-11-20-utc).
+The Windows CLI retrieves one completed, previously exported CSV. Capture, freeze and export remain operator actions. The command is gated to `/mnt/udisk/WaveData163.csv` and the 89,566-byte profile on the original 2015 DSO5102P. The DEV-06A supervised runner qualified one such transfer. The DEV-07 packaged CLI passed a separately authorized, bounded CH1 hardware retrieval on 2026-11-20 UTC. The implementation is merged into main and proposed for v0.2.0, but no v0.2.0 release has been published; future hardware activity still requires approval. See [qualification record](NATIVE_CSV_QUALIFICATION.md#dev-07-packaged-cli--completed-qualification-2026-11-20-utc).
 
 ## Command
 
