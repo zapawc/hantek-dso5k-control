@@ -7,7 +7,7 @@
 | Screen | Historical qualification captured two complete 768,000-byte buffers with 77 checksum-valid frames each. Both decoded to readable 800 × 480 previews. | Qualified for qualitative remote viewing. Both aggregate checks disagreed. Atomic coherence and freshness remain unverified. |
 | Async transfer status | One exact post-primary S92 in each screen window, with quiet startup and guards | Qualified classification and continuation for this observed shape and placement. Both statuses remain origin-unresolved. Strict session FAIL, exit 5. |
 | CH1 waveform decode | Archived display window grammar and historical implementations | Offline conversion only, scale and timing inputs caller-supplied |
-| S10 native CSV retrieval | One DEV-06A staged CH1 transfer matched the independent reference and recorded one S92 | DEV-07 CLI offline-validated for the exact tested profile. See [coverage and limits](../protocol/NATIVE_CSV_CLI.md#qualification-coverage). |
+| S10 native CSV retrieval | DEV-06A predecessor matched one CH1 reference with an S92; installed DEV-07 CLI matched the same reference on 2026-11-20 UTC with zero S92 | Hardware-qualified only for the bounded packaged CH1 operation. Packaged S92 handling remains offline-tested. See [coverage and limits](../protocol/NATIVE_CSV_CLI.md#qualification-coverage). |
 | S02 live retrieval and CH1/CH2 coherence | Transfer-state side effects and generation proof unresolved | Unavailable |
 | Acquisition completion and SINGLE/trigger control | Shared UI state with ambiguous transitions | Unavailable |
 | Reversible settings restoration | Exact inverse and persistence unproven | Unavailable |
