@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hantek-dso5k-control"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read-only qualification and offline analysis for the original Hantek DSO5102P"
 readme = "README.md"
 requires-python = ">=3.10"
