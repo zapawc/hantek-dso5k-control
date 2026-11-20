@@ -1,6 +1,6 @@
 # Native CSV retrieval in the DEV-07 draft
 
-The Windows CLI retrieves one completed, previously exported CSV. Capture, freeze and export remain operator actions. The command is gated to `/mnt/udisk/WaveData163.csv` and the 89,566-byte profile on the original 2015 DSO5102P. The DEV-06A supervised runner qualified one such transfer. The DEV-07 packaged CLI has been exercised offline and needs separate authorization for a hardware run.
+The Windows CLI retrieves one completed, previously exported CSV. Capture, freeze and export remain operator actions. The command is gated to `/mnt/udisk/WaveData163.csv` and the 89,566-byte profile on the original 2015 DSO5102P. The DEV-06A supervised runner qualified one such transfer. The DEV-07 packaged CLI passed a separately authorized, bounded CH1 hardware retrieval on 2026-11-20 UTC. This draft functionality is not yet released; future hardware activity still requires approval. See [qualification record](NATIVE_CSV_QUALIFICATION.md#dev-07-packaged-cli--completed-qualification-2026-11-20-utc).
 
 ## Command
 
@@ -34,8 +34,10 @@ The recognized S92 frame is recorded at the exact frame boundary, including USB 
 
 | Capability | Status |
 | --- | --- |
-| One staged CH1 CSV through S10, byte count, terminal sum and independent SHA-256 | Hardware-qualified in DEV-06A using the supervised runner |
-| One post-file S92 notification and clean interface, lease and marker cleanup | Hardware-observed in the same DEV-06A run |
-| Packaged retrieval orchestration, fragmented/coalesced notifications, failure paths and versioned JSON | Offline regression and archive replay |
+| One staged CH1 CSV through S10, byte count, terminal sum and independent SHA-256 | Hardware-qualified in DEV-06A predecessor and DEV-07 installed CLI, each for the bounded CH1 artifact; DEV-07 passed 2026-11-20 UTC |
+| S92 status classification and clean interface, lease and marker cleanup | S92 observed in DEV-06A predecessor; packaged DEV-07 S92 handling offline-tested (zero S92 observed live), packaged DEV-07 cleanup hardware-qualified on 2026-11-20 UTC |
+| Packaged retrieval orchestration, fragmented/coalesced notifications, failure paths and versioned JSON | Single bounded CH1 happy path hardware-qualified; additional timing, notification and failure cases remain offline regression and archive replay |
 | CH2 S10, back-to-back automated transfers or arbitrary paths/sizes | Unqualified |
 | Remote CSV Save, SINGLE SEQ, external triggering, sample freshness and same-shot CH1/CH2 coherence | Outside the retrieval contract and unqualified |
+
+The DEV-07 live transfer manifest recorded `source_commit: null`; the staging log independently pins the tested checkout to `895c518eeb3cac8333bc5960fc2d3fdff0b6992d`. This distinction must be retained in reports and does not justify rerunning the device transfer.
