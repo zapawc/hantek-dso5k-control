@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hantek native CSV file transfer result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "command_version": {
+      "const": "1.0"
+    },
+    "command": {
+      "const": "files retrieve"
+    },
+    "software_version": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "instrument_path": {
+      "type": "string"
+    },
+    "output_path": {
+      "type": "string"
+    },
+    "evidence_dir": {
+      "type": "string"
+    },
+    "start_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "end_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "BLOCKED",
+        "ERROR",
+        "PASS"
+      ]
+    },
+    "exit_code": {
+      "enum": [
+        0,
+        3,
+        4
+      ]
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "stage",
+            "type",
+            "message"
+          ],
+          "properties": {
+            "stage": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "device": {
+      "type": "object",
+      "properties": {
+        "vid_pid": {
+          "const": "049F:505A"
+        },
+        "model": {
+          "const": "DSO5102P"
+        },
+        "firmware_baseline": {
+          "type": "string"
+        },
+        "firmware_verified_live": {
+          "const": false
+        },
+        "interface": {
+          "const": 0
+        },
+        "bulk_in": {
+          "const": "0x81"
+        },
+        "bulk_out": {
+          "const": "0x02"
+        }
+      },
+      "required": [
+        "vid_pid",
+        "model",
+        "firmware_baseline",
+        "firmware_verified_live",
+        "interface",
+        "bulk_in",
+        "bulk_out"
+      ],
+      "additionalProperties": false
+    },
+    "host": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "operator_confirmations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "max_bytes": {
+      "type": "integer"
+    },
+    "transfer_timeout_seconds": {
+      "type": "integer"
+    },
+    "reference": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/fileRecord"
+        }
+      ]
+    },
+    "preflight": {
+      "$ref": "#/$defs/window"
+    },
+    "response": {
+      "$ref": "#/$defs/window"
+    },
+    "async_status_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "request_attempts": {
+      "enum": [
+        0,
+        1
+      ]
+    },
+    "retries": {
+      "const": 0
+    },
+    "transfer_complete": {
+      "type": "boolean"
+    },
+    "integrity": {
+      "enum": [
+        "NOT CHECKED",
+        "FAIL",
+        "PASS"
+      ]
+    },
+    "file_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "data_frames": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "terminal_sum8": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9A-F]{2}$"
+    },
+    "output_published": {
+      "type": "boolean"
+    },
+    "cleanup": {
+      "type": "object",
+      "properties": {
+        "interface_claimed": {
+          "type": "boolean"
+        },
+        "interface_released": {
+          "type": "boolean"
+        },
+        "lease_released": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "interface_claimed",
+        "interface_released",
+        "lease_released"
+      ],
+      "additionalProperties": false
+    },
+    "marker": {
+      "enum": [
+        "NOT CHECKED",
+        "EXISTING",
+        "ABSENT",
+        "RETAINED",
+        "CLEARED"
+      ]
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/fileRecord"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "command_version",
+    "command",
+    "software_version",
+    "source_commit",
+    "instrument_path",
+    "output_path",
+    "evidence_dir",
+    "start_utc",
+    "end_utc",
+    "status",
+    "exit_code",
+    "error",
+    "device",
+    "host",
+    "operator_confirmations",
+    "max_bytes",
+    "transfer_timeout_seconds",
+    "reference",
+    "preflight",
+    "response",
+    "async_status_count",
+    "request_attempts",
+    "retries",
+    "transfer_complete",
+    "integrity",
+    "file_bytes",
+    "sha256",
+    "data_frames",
+    "terminal_sum8",
+    "output_published",
+    "cleanup",
+    "marker",
+    "artifacts"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "window": {
+      "type": "object",
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "raw_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recognized_status_frames": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "primary_frames_seen": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "complete",
+        "raw_bytes",
+        "recognized_status_frames",
+        "primary_frames_seen"
+      ],
+      "additionalProperties": false
+    },
+    "fileRecord": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "bytes",
+        "sha256"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

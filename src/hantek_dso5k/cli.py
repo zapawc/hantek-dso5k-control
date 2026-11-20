@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 
 from . import __version__
+from ._file_replay import FileReplayError, replay_file
+from ._retrieve import CONFIRMATIONS, FILE_BYTES, retrieve
 from ._session import qualify
 from ._settings import settings
 from ._waveform import analyze
@@ -29,6 +31,22 @@ def main(argv=None):
     wave.add_argument("--volts-per-division", type=float, required=True)
     wave.add_argument("--probe-factor", type=float, required=True)
     wave.add_argument("--vertical-position-counts", type=int, required=True)
+    file_replay = offline.add_parser("file-replay", allow_abbrev=False)
+    file_replay.add_argument("input", type=Path)
+    file_replay.add_argument("--filename", required=True)
+    file_replay.add_argument("--expected-bytes", type=int, required=True)
+    file_replay.add_argument("--expected-sha256", required=True)
+    file_replay.add_argument("--output", type=Path, required=True)
+    files = cmds.add_parser("files", allow_abbrev=False).add_subparsers(dest="action", required=True)
+    fetch = files.add_parser("retrieve", allow_abbrev=False)
+    fetch.add_argument("--instrument-path", required=True)
+    fetch.add_argument("--output", required=True, type=Path)
+    fetch.add_argument("--reference", required=True, type=Path)
+    fetch.add_argument("--evidence-dir", required=True, type=Path)
+    fetch.add_argument("--max-bytes", type=int, default=FILE_BYTES)
+    fetch.add_argument("--transfer-timeout", type=int, default=12)
+    for confirmation in CONFIRMATIONS:
+        fetch.add_argument("--confirm-" + confirmation, action="store_true")
     for name, actions in {"device": ["identify"], "settings": ["read"], "clock": ["read", "compare", "sync"],
                           "capture": ["single"]}.items():
         family = cmds.add_parser(name, allow_abbrev=False).add_subparsers(dest="action", required=True)
@@ -50,19 +68,33 @@ def main(argv=None):
             output = qualify(args.output, confirmed=args.confirm_single_client,
                              history_confirmed=args.confirm_settled_history)
             code = output["exit_code"]
+        elif args.command == "files":
+            confirmations = [name for name in CONFIRMATIONS
+                             if getattr(args, "confirm_" + name.replace("-", "_"))]
+            output = retrieve(args.instrument_path, args.output, args.reference, args.evidence_dir,
+                              max_bytes=args.max_bytes, timeout=args.transfer_timeout, confirmations=confirmations)
+            code = output["exit_code"]
         elif args.command == "offline":
             if args.action == "settings":
                 with args.input.open("rb") as handle:
                     output = settings(handle.read(209))
-            else:
+            elif args.action == "waveform":
                 output = analyze(args.input, args.output, args.sample_interval, args.volts_per_division,
                                  args.probe_factor, args.vertical_position_counts)
                 output = {"schema_version": "1.0", **output}
+            else:
+                output = replay_file(args.input, args.output, args.filename, args.expected_bytes,
+                                     args.expected_sha256)
+                output = {"schema_version": "1.0", "command": "offline file-replay", **output}
             code = 0
         else:
             output = {"schema_version": "1.0", "status": "UNAVAILABLE",
                       "command": args.command, "action": getattr(args, "action", None)}
             code = 6
+    except FileReplayError as exc:
+        output = {"schema_version": "1.0", "command": "offline file-replay", "status": "ERROR",
+                  "error": exc.reason, "detail": str(exc)}
+        code = 4
     except (OSError, ValueError) as exc:
         output = {"schema_version": "1.0", "status": "ERROR", "error": type(exc).__name__}
         code = 4

@@ -5,6 +5,22 @@ from types import SimpleNamespace
 from ._host import Blocked
 
 
+class ClaimedBulkIO:
+    """Use only the bulk endpoints of an already validated, claimed interface."""
+
+    def __init__(self, link):
+        self.link = link
+
+    def read(self, size, *, timeout_ms):
+        try:
+            return bytes(self.link.device.read(0x81, size, timeout=timeout_ms))
+        except self.link.timeout_error as exc:
+            raise TimeoutError from exc
+
+    def write(self, request):
+        return self.link.device.write(0x02, request, timeout=2000)
+
+
 @contextmanager
 def open_link():
     import usb.core
