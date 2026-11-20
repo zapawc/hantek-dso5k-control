@@ -1,6 +1,6 @@
 # Hantek integration for consumer projects
 
-Copy this guide into a consumer project as a reference. Use the canonical Hantek GitHub repository for shared source, versioned schemas, capability status and Issues when it is provisioned. Consumer projects own their procedures, acceptance thresholds, analysis and presentation. Use the `hantek` CLI as a subprocess. Keep USB protocol code and firmware research in the Hantek project.
+Copy this guide into a consumer project as a reference. Use the public canonical Hantek GitHub repository for shared source, versioned schemas, capability status and Issues. Consumer projects own their procedures, acceptance thresholds, analysis and presentation. Use the `hantek` CLI as a subprocess. Keep USB protocol code and firmware research in the Hantek project.
 
 ## Install an approved pin
 
