@@ -38,6 +38,8 @@ def _transfer(channel, manifest_path, csv_path, evidence_dir, expected_sha256):
     report = json.loads(_read(manifest_path, 128 * 1024))
     if not isinstance(report, dict):
         raise PairReviewError(f"{channel}: malformed manifest")
+    if not isinstance(report.get("reference"), dict) or not isinstance(report.get("cleanup"), dict) or not isinstance(report.get("preflight"), dict) or not isinstance(report.get("response"), dict) or not isinstance(report.get("artifacts"), dict):
+        raise PairReviewError(f"{channel}: invalid manifest subrecords")
     expected_flags = (
         report.get("status") == "PASS", report.get("exit_code") == 0,
         report.get("instrument_path") == path,
@@ -75,6 +77,14 @@ def _transfer(channel, manifest_path, csv_path, evidence_dir, expected_sha256):
         raise PairReviewError(f"{channel}: request did not target exact file")
     if len(raw_files["preflight_rx.bin"]) != report["preflight"].get("raw_bytes"):
         raise PairReviewError(f"{channel}: preflight size differs")
+    preflight_report = {"recognized_status_frames": 0, "primary_frames_seen": 0}
+    preflight_stream = ReceiveStream(lambda *args, **kwargs: None, preflight_report,
+                                     primary_opcode=None, max_frame_bytes=0)
+    preflight_stream.feed(raw_files["preflight_rx.bin"], 1, 0.0, "offline-replay")
+    preflight_stream.finish()
+    if preflight_report["recognized_status_frames"] != report["preflight"].get("recognized_status_frames"):
+        raise PairReviewError(f"{channel}: preflight status accounting differs")
+
     if channel == "CH2" and raw_files["preflight_rx.bin"]:
         raise PairReviewError("CH2: preflight was not silent")
     wire = raw_files["response_rx.bin"]
