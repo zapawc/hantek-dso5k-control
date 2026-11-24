@@ -292,6 +292,50 @@ class PairSessionTests(unittest.TestCase):
         self.assertFalse(self.specs[1].output.exists())
         self.assertFalse(self.marker.exists())  # USB and cleanup settled before local publication
 
+    def test_interrupted_ch1_read_retains_marker_and_releases_both_resources(self):
+        original_read = self.link.read
+
+        def read(*args, **kwargs):
+            if self.link.writes:
+                raise KeyboardInterrupt()
+            return original_read(*args, **kwargs)
+
+        self.link.read = read
+        result = self.execute()
+        self.assertEqual(result["error"]["type"], "KeyboardInterrupt")
+        self.assertEqual(result["request_attempts"], 1)
+        self.assertEqual(result["marker"], "RETAINED")
+        self.assertTrue(result["cleanup"]["interface_released"])
+        self.assertTrue(result["cleanup"]["lease_released"])
+        self.assertFalse(any(spec.output.exists() for spec in self.specs))
+
+    def test_evidence_finalization_failure_never_reports_pass(self):
+        with patch("hantek_dso5k._pair_session.write_json_new", side_effect=OSError("disk full")):
+            result = self.execute()
+        self.assertEqual(result["error"]["stage"], "evidence_finalize")
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["request_attempts"], 2)
+        self.assertEqual(result["marker"], "CLEARED")
+        self.assertTrue(result["cleanup"]["lease_released"])
+        self.assertTrue(all(spec.output.exists() for spec in self.specs))
+        self.assertTrue((self.evidence / "CH1_response_rx.bin").is_file())
+
+    def test_partial_ch1_response_blocks_ch2(self):
+        self.link.first = deque([frames(self.data["CH1"])[:-1]])
+        result = self.execute()
+        self.assertEqual(result["error"]["stage"], "CH1_response")
+        self.assertEqual(result["request_attempts"], 1)
+        self.assertEqual(result["marker"], "RETAINED")
+
+    def test_ch2_disconnection_preserves_verified_ch1(self):
+        self.link.fault_on_second_read = True
+        result = self.execute()
+        self.assertEqual(result["error"]["stage"], "CH2_response")
+        self.assertEqual(result["request_attempts"], 2)
+        self.assertTrue(result["channels"]["CH1"]["transfer_complete"])
+        self.assertEqual(result["marker"], "RETAINED")
+        self.assertFalse(any(spec.output.exists() for spec in self.specs))
+
     def test_all_receive_windows_are_twelve_seconds(self):
         result = self.execute()
         self.assertEqual(result["exit_code"], 0, result)

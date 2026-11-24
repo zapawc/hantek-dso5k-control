@@ -65,8 +65,11 @@ def invocation_reason(row):
         command = tail[index:]
         if command and ntpath.basename(command[0]) in SCRIPTS:
             return "Python directly invokes known Hantek client script"
-        if command[:2] == ["-m", "hantek_dso5k"] and command[2:4] == ["qualify", "readonly"]:
-            return "Python directly invokes Hantek qualification"
+        if command[:2] == ["-m", "hantek_dso5k"]:
+            if command[2:4] == ["qualify", "readonly"]:
+                return "Python directly invokes Hantek qualification"
+            if command[2:4] in (["files", "retrieve"], ["files", "retrieve-pair"]):
+                return "Python directly invokes Hantek retrieval"
     if image in ("powershell.exe", "pwsh.exe"):
         for index, arg in enumerate(tail):
             if arg in ("-command", "-c"):

@@ -1,8 +1,4 @@
-"""ACQ-06 offline-injected sequential CH1/CH2 S10 controller.
-
-NO live entrypoint and NO default USB backend: engineering simulation only.
-Enabling actual hardware use requires separate architecture approval and code.
-"""
+"""Bounded sequential CH1/CH2 S10 controller with explicit dependencies."""
 from contextlib import contextmanager
 from hashlib import sha256
 import json
@@ -66,13 +62,48 @@ def _record_reference(spec, count):
 
 def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
                   hold=None, census=None, claim=None, assess=None, clock=None, marker=None):
-    """Run using *injected offline fakes only*. No production transport is reachable.
-
-    A human-reviewed hardware entrypoint cannot call this function until a
-    separate hardware-facing adapter is explicitly implemented.
-    """
+    """Run a simulation with caller-supplied dependencies and no live defaults."""
     if any(x is None for x in (hold, census, claim, assess, clock, marker)):
         raise PairBlocked("ACQ-06 has no live backend; offline injected dependencies required")
+    return _run_pair(spec_ch1, spec_ch2, evidence_dir, confirmations=confirmations,
+                     hold=hold, census=census, claim=claim, assess=assess, clock=clock, marker=marker)
+
+
+def pair_paths(specs, evidence, marker):
+    """Check names before admission and resolve parent aliases for publication."""
+    require_absent(evidence)
+    evidence = evidence.resolve()
+    marker = marker.resolve()
+    if (marker == evidence or marker in evidence.parents or not evidence.parent.is_dir()
+            or evidence.is_reserved() or
+            (os.name == "nt" and (":" in evidence.name or evidence.name.endswith((".", " "))))):
+        raise PairBlocked("Evidence needs an existing parent separate from the marker")
+    paths = []
+    for spec in specs:
+        out = Path(spec.output).absolute()
+        require_absent(out)
+        if not out.parent.is_dir() or out.is_reserved() or (
+                os.name == "nt" and (":" in out.name or out.name.endswith((".", " ")))):
+            raise PairBlocked("Each output requires an existing parent and nonreserved filename")
+        out = out.parent.resolve() / out.name
+        require_absent(out)
+        if out == marker or out == evidence or evidence in out.parents:
+            raise PairBlocked("Outputs must be separate from marker and evidence")
+        paths.append(out)
+    if len(set(paths)) != 2:
+        raise PairBlocked("Outputs must be distinct")
+    references = [Path(spec.reference).resolve() for spec in specs]
+    if len(set(references)) != 2 or any(ref in paths or ref == marker for ref in references):
+        raise PairBlocked("Reference paths must be separate from outputs and marker")
+    return evidence, paths
+
+
+def pair_references(specs):
+    return [_record_reference(spec, count) for (_, _, count), spec in zip(PROFILES, specs)]
+
+
+def _run_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations, hold, census, claim,
+              assess, clock, marker, source_commit=None):
     specs = (spec_ch1, spec_ch2)
     evidence = Path(evidence_dir).absolute()
     marker = Path(marker).absolute()
@@ -83,7 +114,8 @@ def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
         "acquisition_coherence": "UNPROVEN", "hardware_qualified": False,
         "request_attempts": 0, "retries": 0, "marker": "NOT CHECKED",
         "host": None, "error": None,
-        "cleanup": {"interface_claimed": False, "interface_released": False, "lease_released": False},
+        "cleanup": {"interface_claimed": False, "interface_released": False,
+                    "lease_acquired": False, "lease_released": False},
         "preflight": window_result(), "inter_request_guard": window_result(),
         "channels": {key: {
             "instrument_path": "/mnt/udisk/" + filename,
@@ -94,6 +126,9 @@ def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
         } for (key, filename, size), spec in zip(PROFILES, specs)},
         "artifacts": {},
     }
+    if source_commit is not None:
+        result.update(schema_version="0.1-supervised", command="files retrieve-pair",
+                      source="supervised Windows adapter", source_commit=source_commit)
     journal = None
     created = False
     stage = "evidence_setup"
@@ -107,29 +142,15 @@ def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
     try:
         if set(confirmations) != set(CONFIRMATIONS):
             raise PairBlocked("All six operator confirmations required")
-        if evidence.exists() or evidence.is_symlink():
-            raise PairBlocked("Evidence directory must not exist")
-        if marker == evidence or marker in evidence.parents:
-            raise PairBlocked("Marker and evidence paths must be independent")
-        paths = [Path(spec.output).absolute() for spec in specs]
-        if len(set(paths)) != 2 or any(out == evidence or evidence in out.parents for out in paths):
-            raise PairBlocked("Outputs must be distinct and outside evidence directory")
-        for out in paths:
-            require_absent(out)
-            if not out.parent.is_dir() or out.is_reserved():
-                raise PairBlocked("Each output requires an existing parent and nonreserved filename")
-            if out == marker:
-                raise PairBlocked("Output cannot be interruption marker")
-        references = [Path(spec.reference).absolute() for spec in specs]
-        if len(set(references)) != 2 or any(ref in paths or ref == marker for ref in references):
-            raise PairBlocked("Reference paths must be separate from outputs and marker")
-        for (key, _, count), spec in zip(PROFILES, specs):
-            result["channels"][key]["reference"] = _record_reference(spec, count)
+        evidence, paths = pair_paths(specs, evidence, marker)
+        for (key, _, _), ref, path in zip(PROFILES, pair_references(specs), paths):
+            result["channels"][key].update(reference=ref, output_path=str(path))
         evidence.mkdir(exist_ok=False)
         created = True
         with (evidence / "journal.jsonl").open("x", encoding="utf-8") as journal:
             stage = "host_preflight"
             with record_cleanup(hold(), result["cleanup"], "lease_released"):
+                result["cleanup"]["lease_acquired"] = True
                 if os.path.lexists(marker):
                     result["marker"] = "EXISTING"
                     raise PairBlocked("Prior interrupted operation requires external review")
@@ -140,10 +161,11 @@ def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
                 marker.parent.mkdir(parents=True, exist_ok=True)
                 with marker.open("x", encoding="utf-8") as stream:
                     result["marker"] = "RETAINED"
-                    json.dump({"utc": utc(), "operation": "ACQ-06 simulated pair"}, stream)
+                    result["status"], result["exit_code"] = "ERROR", 4
+                    json.dump({"utc": utc(), "operation": result["command"],
+                               "source_commit": source_commit}, stream)
                     stream.flush()
                     os.fsync(stream.fileno())
-                result["status"], result["exit_code"] = "ERROR", 4
                 stage = "claim"
                 with record_cleanup(claim(), result["cleanup"], "interface_released") as raw_link:
                     result["cleanup"]["interface_claimed"] = True
@@ -161,6 +183,7 @@ def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
                                         duration=WINDOW, rx_limit=MAX_RX_BYTES, require_silence=True)
                             result["inter_request_guard"]["complete"] = True
                         # Fail closed on destinations being introduced during USB activity.
+                        stage = key + "_destination"
                         for out in paths:
                             require_absent(out)
                         stage = key + "_write"
@@ -198,13 +221,16 @@ def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
             marker.unlink()
             result["marker"] = "CLEARED"
             stage = "publish"
-            for key, spec in zip(("CH1", "CH2"), specs):
-                publish_file(Path(spec.output).absolute(), completed_bytes[key],
+            for key, path in zip(("CH1", "CH2"), paths):
+                publish_file(path, completed_bytes[key],
                              result["channels"][key]["reference"]["sha256"])
                 result["channels"][key]["output_published"] = True
                 log("output_published", channel=key)
-            result["status"], result["exit_code"] = "PASS", 0
+            stage = "journal_close"
+        result["status"], result["exit_code"] = "PASS", 0
     except (Exception, KeyboardInterrupt) as exc:
+        if result["cleanup"]["lease_acquired"] and not result["cleanup"]["lease_released"]:
+            result["status"], result["exit_code"] = "ERROR", 4
         result["error"] = {"stage": stage, "type": type(exc).__name__, "message": str(exc)}
     result["end_utc"] = utc()
     if created:
@@ -216,6 +242,8 @@ def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
             write_json_new(evidence / "pair_manifest.json", result)
         except (Exception, KeyboardInterrupt) as exc:
             result["status"], result["exit_code"] = "ERROR", 4
-            result["error"] = {"stage": "evidence_finalize", "type": type(exc).__name__,
-                               "message": str(exc)}
+            result["evidence_error"] = {"stage": "evidence_finalize", "type": type(exc).__name__,
+                                        "message": str(exc)}
+            if result["error"] is None:
+                result["error"] = result["evidence_error"]
     return result

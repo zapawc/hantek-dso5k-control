@@ -57,6 +57,15 @@ def main(argv=None):
     fetch.add_argument("--expected-sha256", help="reviewed independent reference digest, required for experimental CH2")
     for confirmation in CONFIRMATIONS:
         fetch.add_argument("--confirm-" + confirmation, action="store_true")
+    for action in ("pair-preflight", "retrieve-pair"):
+        command = files.add_parser(action, allow_abbrev=False)
+        for name in ("ch1-reference", "ch2-reference", "ch1-output", "ch2-output", "evidence-dir"):
+            command.add_argument("--" + name, required=True, type=Path)
+        for name in ("ch1-sha256", "ch2-sha256", "source-commit"):
+            command.add_argument("--" + name, required=True)
+        if action == "retrieve-pair":
+            for confirmation in CONFIRMATIONS:
+                command.add_argument("--confirm-" + confirmation, action="store_true")
     for name, actions in {"device": ["identify"], "settings": ["read"], "clock": ["read", "compare", "sync"],
                           "capture": ["single"]}.items():
         family = cmds.add_parser(name, allow_abbrev=False).add_subparsers(dest="action", required=True)
@@ -77,6 +86,19 @@ def main(argv=None):
         if args.command == "qualify":
             output = qualify(args.output, confirmed=args.confirm_single_client,
                              history_confirmed=args.confirm_settled_history)
+            code = output["exit_code"]
+        elif args.command == "files" and args.action != "retrieve":
+            from ._pair_session import PairSpec
+            from ._pair_windows import passive_preflight, retrieve_pair
+
+            specs = (PairSpec(args.ch1_reference, args.ch1_sha256, args.ch1_output),
+                     PairSpec(args.ch2_reference, args.ch2_sha256, args.ch2_output))
+            if args.action == "pair-preflight":
+                output = passive_preflight(specs, args.evidence_dir, args.source_commit)
+            else:
+                confirmations = [name for name in CONFIRMATIONS
+                                 if getattr(args, "confirm_" + name.replace("-", "_"))]
+                output = retrieve_pair(specs, args.evidence_dir, args.source_commit, confirmations)
             code = output["exit_code"]
         elif args.command == "files":
             confirmations = [name for name in CONFIRMATIONS
