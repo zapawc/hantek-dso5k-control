@@ -1,5 +1,7 @@
 """Offline ACQ-05 tests; synthetic transfers only, no USB library or hardware."""
+from contextlib import redirect_stdout, redirect_stderr
 from hashlib import sha256
+from io import StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +10,7 @@ import unittest
 from hantek_dso5k._file_replay import CHUNK_BYTES, csv_request
 from hantek_dso5k._framing import frame, STATUS
 from hantek_dso5k._pair_review import PairReviewError, review_pair
+from hantek_dso5k.cli import main
 
 
 class PairReviewTests(unittest.TestCase):
@@ -75,6 +78,24 @@ class PairReviewTests(unittest.TestCase):
         self.assertFalse(result["automated_paired_retrieval_qualified"])
         self.assertEqual(result["ch2"]["s92_status_frames"], 1)
         self.assertEqual(json.loads(self.output.read_text()), result)
+
+    def test_actual_cli_offline_dispatch_without_usb(self):
+        options = [
+            "--ch1-manifest", str(self.args[0]),
+            "--ch1-csv", str(self.args[1]),
+            "--ch1-evidence", str(self.args[2]),
+            "--ch1-sha256", self.args[3],
+            "--ch2-manifest", str(self.args[4]),
+            "--ch2-csv", str(self.args[5]),
+            "--ch2-evidence", str(self.args[6]),
+            "--ch2-sha256", self.args[7],
+            "--output", str(self.output),
+        ]
+        stdout = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(StringIO()):
+            self.assertEqual(main(["offline", "pair-review", *options]), 0)
+        self.assertEqual(json.loads(stdout.getvalue())["acquisition_coherence"], "UNPROVEN")
+        self.assertTrue(self.output.exists())
 
     def test_tampered_csv_blocks_output(self):
         csv = self.args[1]
