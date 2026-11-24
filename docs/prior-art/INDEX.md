@@ -25,6 +25,9 @@ These classifications may coexist. A tested predecessor can support reuse while 
 
 ## Acquisition
 
+**ACQ-05 proposed reuse (HPA-P01/P02/P03, HPA-A01/A03, HPA-S01, HPA-L01/L02):** Both bounded individual CH1 and CH2 S10 profiles have now been independently hardware-qualified. The offline pair-review candidate validates preserved transfer bytes, per-file manifests and hashes without asserting a common trigger. Live sequential two-file retrieval and acquisition coherence remain unqualified. See [ACQ-05 design and limits](../protocol/PAIRED_CSV_ACQ05.md).
+
+
 **ACQ-02 update (HPA-P01, HPA-P02, HPA-P03, HPA-A01, HPA-S01, HPA-L01).** The immutable v0.2.0 release contains the qualified CH1 path only. The experimental CH2 candidate reuses the same framing, byte validation, lease and marker, with an explicit reference digest and a silent preflight for CH2. Coverage is synthetic and offline. The exact closed CH2 file on the instrument is unverified. See the [experimental profile](../protocol/NATIVE_CSV_CLI.md#experimental-ch2-offline-candidate).
 
 | ID | Capability | Evidence and source | Limits and reuse |

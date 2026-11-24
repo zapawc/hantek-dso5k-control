@@ -18,6 +18,10 @@ The instrument must be in a verified suitable state before any hardware operatio
 
 For source-based offline analysis use `python -m pip install .`; for approved Windows hardware access use `python -m pip install ".[winusb]"` in a dedicated environment with reviewed, pinned dependencies. Prefer an approved immutable Git commit or release wheel with verified SHA-256 for consumers. Run offline regressions with `python -m unittest discover -s tests -v` and `src` on `PYTHONPATH`, or from an installed checkout. CI uses synthetic streams and does not access the scope.
 
+## Offline paired evidence review
+
+The development-only `hantek offline pair-review` validates two completed single-file transfer manifests, their exact raw S10/S90/S92 evidence, and independent SHA-256 references. This is **not** a combined acquisition, live paired USB workflow, or evidence of a common trigger. See [ACQ-05 architecture](docs/protocol/PAIRED_CSV_ACQ05.md).
+
 ## Limitations and documentation
 
 Automated SINGLE/EXT trigger control, remote CSV Save/Recall, S02 live streaming, guaranteed acquisition freshness, CH1/CH2 same-shot coherence, restoration, clock synchronization and firmware modification are unavailable or unqualified. The packaged file-retrieval S92 classifier has offline coverage, but no S92 notification occurred during its recorded live qualification.
