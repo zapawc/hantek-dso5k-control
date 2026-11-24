@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from hantek_dso5k._framing import STATUS, frame
 from hantek_dso5k._file_replay import CHUNK_BYTES, csv_request
@@ -230,6 +231,72 @@ class PairSessionTests(unittest.TestCase):
         self.assertFalse(result["cleanup"]["interface_released"])
         self.assertTrue(self.marker.exists())
         self.assertFalse(self.specs[0].output.exists())
+
+    def test_ch2_wrong_digest_never_publishes_pair(self):
+        tampered = self.data["CH2"][:-1] + bytes([self.data["CH2"][-1] ^ 1])
+        self.link.second = deque([frames(tampered)])
+        result = self.execute()
+        self.assertEqual(result["error"]["stage"], "CH2_validate")
+        self.assertEqual(result["request_attempts"], 2)
+        self.assertEqual(result["channels"]["CH1"]["integrity"], "PASS")
+        self.assertFalse(result["channels"]["CH1"]["output_published"])
+        self.assertTrue(self.marker.exists())
+
+    def test_lease_cleanup_failure_retains_marker(self):
+        self.lease_failure = True
+        result = self.execute()
+        self.assertEqual(result["exit_code"], 4)
+        self.assertFalse(result["cleanup"]["lease_released"])
+        self.assertTrue(self.marker.exists())
+        self.assertFalse(any(spec.output.exists() for spec in self.specs))
+
+    def test_duplicate_destination_blocks_without_claim(self):
+        a, b = self.specs
+        result = self.execute(specs=(a, PairSpec(b.reference, b.expected_sha256, a.output)))
+        self.assertEqual(result["exit_code"], 3)
+        self.assertEqual(self.link.writes, [])
+        self.assertNotIn("claim_enter", self.events)
+
+    def test_ch1_output_collision_during_usb_blocks_ch2(self):
+        # Simulates a second writer creating the destination after the host checks.
+        original_read = self.link.read
+        first = [True]
+        def read(*args, **kwargs):
+            if first[0]:
+                first[0] = False
+                self.specs[0].output.write_bytes(b"collision")
+            return original_read(*args, **kwargs)
+        self.link.read = read
+        result = self.execute()
+        self.assertEqual(result["exit_code"], 4)
+        self.assertEqual(result["request_attempts"], 0)
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.specs[0].output.read_bytes(), b"collision")
+
+    def test_second_publication_error_is_partial_not_pair_pass(self):
+        from hantek_dso5k._pair_session import publish_file as original_publish
+        attempted = []
+        def publish(path, data, digest):
+            attempted.append(path)
+            if len(attempted) == 2:
+                raise OSError("simulated CH2 disk error")
+            return original_publish(path, data, digest)
+        with patch("hantek_dso5k._pair_session.publish_file", side_effect=publish):
+            result = self.execute()
+        self.assertEqual(result["exit_code"], 4)
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["error"]["stage"], "publish")
+        self.assertTrue(result["channels"]["CH1"]["output_published"])
+        self.assertFalse(result["channels"]["CH2"]["output_published"])
+        self.assertTrue(self.specs[0].output.exists())
+        self.assertFalse(self.specs[1].output.exists())
+        self.assertFalse(self.marker.exists())  # USB and cleanup settled before local publication
+
+    def test_all_receive_windows_are_twelve_seconds(self):
+        result = self.execute()
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertGreaterEqual(self.link.clock, 48)
+        self.assertLess(self.link.clock, 50)
 
     def test_controller_refuses_live_defaults(self):
         with self.assertRaises(PairBlocked):
