@@ -80,7 +80,8 @@ class ReceiveStream:
             self.fail("incomplete frame at observation deadline")
 
 
-def observe(link, clock, started, rx, log, report, *, duration, rx_limit, primary_opcode=None, max_frame_bytes=0):
+def observe(link, clock, started, rx, log, report, *, duration, rx_limit, primary_opcode=None, max_frame_bytes=0,
+            require_silence=False):
     """Record API transfers and validate frame boundaries inside the hard RX budget."""
     deadline = started + duration
     received = poll = 0
@@ -110,6 +111,8 @@ def observe(link, clock, started, rx, log, report, *, duration, rx_limit, primar
         report["raw_bytes"] = received
         if not data or len(data) > capacity or completed > deadline:
             raise ReceiveError("unexpected transfer size or data outside the observation window")
+        if require_silence:
+            raise ReceiveError("unexpected traffic during the silent CH2 preflight")
         stream.feed(data, poll, completed, timestamp)
     stream.finish()
     log("window_completed", received_bytes=received, polls=poll)

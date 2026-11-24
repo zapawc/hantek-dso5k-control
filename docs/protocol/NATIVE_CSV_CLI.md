@@ -19,6 +19,14 @@ The flags declare that the operator has verified the unit and original firmware,
 
 `--max-bytes` defaults to 89,566 and must be between 89,566 and 98,304. It is an admission ceiling for the fixed-size profile. Raising it does not permit a larger file. `--transfer-timeout` is in seconds and accepts only 12 for this profile. A shorter window could miss delayed unexpected bytes. Each raw RX window has a 102,400-byte cap inclusive of status traffic. Requests are aligned as needed to stay within that cap. The CLI uses a 12-second receive-only preflight and one 12-second window after the sole write. A fault may terminate observation early. There are no retries, resets, extra queries or file-enumeration operations.
 
+## Experimental CH2 offline candidate
+
+The proposed candidate adds `--experimental-ch2` and `--expected-sha256 HEX` for the exact `/mnt/udisk/WaveData164.csv` profile. Both options are required together for CH2 and reserved for that profile. The reference must be exactly 89,193 bytes and match the reviewed independent digest before the lease or claim. The pilot uses `--max-bytes 89193` and keeps the existing six confirmations and 12-second windows. Obtain the approved digest from local qualification evidence.
+
+CH2 requires 12 seconds of receive-only silence. Any preflight bytes, including an otherwise recognized S92, block transmission and stay in the raw evidence. The response still classifies exact S92 separately. Expect eight 10,208-byte data chunks, a 7,529-byte tail and one terminal, with independent SHA-256 verification before publication. Each invocation can attempt at most one S10 write with zero retries. The CH1 command, its default byte ceiling and its established preflight policy are unchanged.
+
+The immutable v0.2.0 prerelease supports CH1 only. CH2 is synthetic/offline-tested, the current file presence is unverified, and a live run requires a separately approved immutable candidate and reviewed command. Qualification of this single file would leave paired retrieval, arbitrary paths, automation and sample coherence unqualified.
+
 ## Result and diagnostics
 
 One JSON object goes to stdout. A new `--evidence-dir` also receives `transfer_manifest.json` plus local raw USB API evidence. The report uses the [file-transfer 1.0 schema](../../schemas/file-transfer-v1.schema.json). It records reference and received size/digest, data frame count, checksum, accepted status counts by phase, output publication, device and cleanup evidence, marker disposition and error phase. Transfer completion means the bounded S90 reply was fully validated. An output collision or cleanup failure can still make the invocation fail. A retained marker requires review before another device session.

@@ -45,6 +45,9 @@ def main(argv=None):
     fetch.add_argument("--evidence-dir", required=True, type=Path)
     fetch.add_argument("--max-bytes", type=int, default=FILE_BYTES)
     fetch.add_argument("--transfer-timeout", type=int, default=12)
+    fetch.add_argument("--experimental-ch2", action="store_true",
+                       help="select the offline-tested CH2 candidate (live use requires separate approval)")
+    fetch.add_argument("--expected-sha256", help="reviewed independent reference digest, required for experimental CH2")
     for confirmation in CONFIRMATIONS:
         fetch.add_argument("--confirm-" + confirmation, action="store_true")
     for name, actions in {"device": ["identify"], "settings": ["read"], "clock": ["read", "compare", "sync"],
@@ -72,7 +75,8 @@ def main(argv=None):
             confirmations = [name for name in CONFIRMATIONS
                              if getattr(args, "confirm_" + name.replace("-", "_"))]
             output = retrieve(args.instrument_path, args.output, args.reference, args.evidence_dir,
-                              max_bytes=args.max_bytes, timeout=args.transfer_timeout, confirmations=confirmations)
+                              max_bytes=args.max_bytes, timeout=args.transfer_timeout, confirmations=confirmations,
+                              experimental_ch2=args.experimental_ch2, expected_sha256=args.expected_sha256)
             code = output["exit_code"]
         elif args.command == "offline":
             if args.action == "settings":
