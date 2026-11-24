@@ -58,7 +58,7 @@ class FakeLink:
                 queue.appendleft(payload[size:])
             return payload[:size]
         self.clock += timeout_ms / 1000
-        raise Timeout()
+        raise TimeoutError()
 
     def write(self, request):
         self.writes.append(request)
