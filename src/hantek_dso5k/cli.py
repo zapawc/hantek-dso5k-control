@@ -6,6 +6,7 @@ import sys
 
 from . import __version__
 from ._file_replay import FileReplayError, replay_file
+from ._pair_review import review_pair
 from ._retrieve import CONFIRMATIONS, FILE_BYTES, retrieve
 from ._session import qualify
 from ._settings import settings
@@ -37,6 +38,12 @@ def main(argv=None):
     file_replay.add_argument("--expected-bytes", type=int, required=True)
     file_replay.add_argument("--expected-sha256", required=True)
     file_replay.add_argument("--output", type=Path, required=True)
+    pair = offline.add_parser("pair-review", allow_abbrev=False)
+    for name in ("ch1-manifest", "ch1-csv", "ch1-evidence",
+                 "ch2-manifest", "ch2-csv", "ch2-evidence", "output"):
+        pair.add_argument("--" + name, required=True, type=Path)
+    pair.add_argument("--ch1-sha256", required=True)
+    pair.add_argument("--ch2-sha256", required=True)
     files = cmds.add_parser("files", allow_abbrev=False).add_subparsers(dest="action", required=True)
     fetch = files.add_parser("retrieve", allow_abbrev=False)
     fetch.add_argument("--instrument-path", required=True)
@@ -79,7 +86,11 @@ def main(argv=None):
                               experimental_ch2=args.experimental_ch2, expected_sha256=args.expected_sha256)
             code = output["exit_code"]
         elif args.command == "offline":
-            if args.action == "settings":
+            if args.action == "pair-review":
+                output = review_pair(args.ch1_manifest, args.ch1_csv, args.ch1_evidence, args.ch1_sha256,
+                                     args.ch2_manifest, args.ch2_csv, args.ch2_evidence, args.ch2_sha256,
+                                     args.output)
+            elif args.action == "settings":
                 with args.input.open("rb") as handle:
                     output = settings(handle.read(209))
             elif args.action == "waveform":
