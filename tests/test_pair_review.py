@@ -109,6 +109,30 @@ class PairReviewTests(unittest.TestCase):
             self.run_review()
         self.assertFalse(self.output.exists())
 
+    def test_unrecognized_preflight_bytes_are_rejected(self):
+        evidence = self.args[2]
+        data = b"\\x53\\x04\\x00\\x90\\x02\\x00\\x00"
+        (evidence / "preflight_rx.bin").write_bytes(data)
+        manifest_path = self.args[0]
+        report = json.loads(manifest_path.read_text())
+        report["preflight"]["raw_bytes"] = len(data)
+        report["artifacts"]["preflight_rx.bin"] = {
+            "bytes": len(data), "sha256": sha256(data).hexdigest(),
+        }
+        manifest_path.write_text(json.dumps(report))
+        with self.assertRaises(ValueError):
+            self.run_review()
+        self.assertFalse(self.output.exists())
+
+    def test_invalid_manifest_subrecords_are_rejected(self):
+        manifest_path = self.args[0]
+        report = json.loads(manifest_path.read_text())
+        report["reference"] = None
+        manifest_path.write_text(json.dumps(report))
+        with self.assertRaises(PairReviewError):
+            self.run_review()
+        self.assertFalse(self.output.exists())
+
     def test_existing_destination_is_never_overwritten(self):
         self.output.write_text("preserve")
         with self.assertRaises(PairReviewError):
