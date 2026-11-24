@@ -7,9 +7,10 @@ import os
 from pathlib import Path
 import sys
 from time import perf_counter
+from typing import NamedTuple
 
 from . import __version__
-from ._file_replay import CHUNK_BYTES, MAX_FILE_BYTES, MAX_RX_BYTES, csv_request, decode_file_reply, publish_file
+from ._file_replay import CHUNK_BYTES, MAX_FILE_BYTES, MAX_RX_BYTES, SHA256_HEX, csv_request, decode_file_reply, publish_file
 from ._host import Blocked, assess_host, host_snapshot, lease
 from ._qualification import WINDOW
 from ._receive import observe, ReceiveError
@@ -25,10 +26,22 @@ CONFIRMATIONS = ("device-identity", "single-client", "settled-history", "complet
                  "no-active-save-recall", "independent-reference")
 
 
+class FileProfile(NamedTuple):
+    basename: str
+    file_bytes: int
+    experimental_ch2: bool = False
+
+
+_PROFILES = {
+    INSTRUMENT_PATH: FileProfile(FILENAME, FILE_BYTES),
+    "/mnt/udisk/WaveData164.csv": FileProfile("WaveData164.csv", 89_193, experimental_ch2=True),
+}
+
+
 class SingleFileIO(ClaimedBulkIO):
-    def __init__(self, link):
+    def __init__(self, link, instrument_path=INSTRUMENT_PATH):
         super().__init__(link)
-        self.request = csv_request(FILENAME)
+        self.request = csv_request(_PROFILES[instrument_path].basename)
         self.attempted = False
 
     def write(self, request):
@@ -69,6 +82,7 @@ def window_result():
 
 
 def retrieve(instrument_path, output, reference, directory, *, max_bytes, timeout, confirmations,
+             experimental_ch2=False, expected_sha256=None,
              hold=lease, census=host_snapshot, claim=open_link, clock=perf_counter, marker=None):
     """Run one bounded retrieval, using injected transport only in offline tests."""
     output, reference, directory = (Path(path).absolute() for path in (output, reference, directory))
@@ -110,19 +124,29 @@ def retrieve(instrument_path, output, reference, directory, *, max_bytes, timeou
             stage = "host_preflight"
             if set(confirmations) != set(CONFIRMATIONS):
                 raise Blocked("All six operator confirmations are required")
-            if instrument_path != INSTRUMENT_PATH:
+            profile = _PROFILES.get(instrument_path)
+            if profile is None:
                 raise Blocked("Only the exact qualified instrument path is supported")
-            if not FILE_BYTES <= max_bytes <= MAX_FILE_BYTES or timeout != WINDOW:
-                raise Blocked("Limits must accommodate the 89,566-byte profile and the full 12-second window")
+            if profile.experimental_ch2:
+                if not experimental_ch2:
+                    raise Blocked("CH2 requires --experimental-ch2")
+                if expected_sha256 is None or SHA256_HEX.fullmatch(expected_sha256) is None:
+                    raise Blocked("CH2 requires a reviewed --expected-sha256 with 64 hexadecimal digits")
+            elif experimental_ch2 or expected_sha256 is not None:
+                raise Blocked("Experimental CH2 options require the exact CH2 instrument path")
+            if not profile.file_bytes <= max_bytes <= MAX_FILE_BYTES or timeout != WINDOW:
+                raise Blocked(f"Limits must accommodate the {profile.file_bytes:,}-byte profile and the full 12-second window")
             require_absent(output)
             if not output.parent.is_dir() or output.is_reserved():
                 raise Blocked("Destination must have an existing local parent and a regular filename")
             with reference.open("rb") as handle:
-                reference_data = handle.read(FILE_BYTES + 1)
-            if len(reference_data) != FILE_BYTES:
-                raise Blocked("The independent reference must be exactly 89,566 bytes")
+                reference_data = handle.read(profile.file_bytes + 1)
+            if len(reference_data) != profile.file_bytes:
+                raise Blocked(f"The independent reference must be exactly {profile.file_bytes:,} bytes")
             digest = sha256(reference_data).hexdigest()
-            result["reference"] = {"bytes": FILE_BYTES, "sha256": digest}
+            result["reference"] = {"bytes": profile.file_bytes, "sha256": digest}
+            if profile.experimental_ch2 and digest != expected_sha256.lower():
+                raise Blocked("The independent CH2 reference does not match the reviewed SHA-256")
             cleanup = result["cleanup"]
             with record_cleanup(hold(), cleanup, "lease_released"):
                 if marker is None:
@@ -144,11 +168,11 @@ def retrieve(instrument_path, output, reference, directory, *, max_bytes, timeou
                 result["status"], result["exit_code"] = "ERROR", 4
                 with record_cleanup(claim(), cleanup, "interface_released") as claimed:
                     cleanup["interface_claimed"] = True
-                    link = SingleFileIO(claimed)
+                    link = SingleFileIO(claimed, instrument_path)
                     stage = "receive_preflight"
                     with (directory / "preflight_rx.bin").open("xb") as rx:
                         observe(link, clock, clock(), rx, log, result["preflight"], duration=WINDOW,
-                                rx_limit=MAX_RX_BYTES)
+                                rx_limit=MAX_RX_BYTES, require_silence=profile.experimental_ch2)
                     result["preflight"]["complete"] = True
                     require_absent(output)
                     stage = "write"
@@ -168,7 +192,7 @@ def retrieve(instrument_path, output, reference, directory, *, max_bytes, timeou
                     result["response"]["complete"] = True
                     stage = "validate"
                     result["integrity"] = "FAIL"
-                    data, reply = decode_file_reply(wire, FILE_BYTES, digest)
+                    data, reply = decode_file_reply(wire, profile.file_bytes, digest)
                     result.update(transfer_complete=True, integrity="PASS", file_bytes=reply["received_bytes"],
                                   sha256=reply["sha256"], data_frames=reply["data_frames"],
                                   terminal_sum8=reply["terminal_sum8"])

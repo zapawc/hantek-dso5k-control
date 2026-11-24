@@ -25,6 +25,8 @@ These classifications may coexist. A tested predecessor can support reuse while 
 
 ## Acquisition
 
+**ACQ-02 update (HPA-P01, HPA-P02, HPA-P03, HPA-A01, HPA-S01, HPA-L01).** The immutable v0.2.0 release contains the qualified CH1 path only. The experimental CH2 candidate reuses the same framing, byte validation, lease and marker, with an explicit reference digest and a silent preflight for CH2. Coverage is synthetic and offline. The exact closed CH2 file on the instrument is unverified. See the [experimental profile](../protocol/NATIVE_CSV_CLI.md#experimental-ch2-offline-candidate).
+
 | ID | Capability | Evidence and source | Limits and reuse |
 | --- | --- | --- | --- |
 | HPA-A01 | Native capture-then-extract | Operator-observed frozen traces after manual SINGLE and CH1/CH2 Save/Recall. Offline CSV size, hashes, rows and time-axis comparison. [Investigation issue](https://github.com/zapawc/hantek-dso5k-control/issues/1), [CSV workflow](https://github.com/zapawc/hantek-dso5k-control/blob/895c518eeb3cac8333bc5960fc2d3fdff0b6992d/docs/protocol/NATIVE_CSV_CLI.md), local F1/F2 and DEV-03/04 | Prefer the staged workflow. Common time axes alone do not establish hardware simultaneity. Remote Save, CH2 S10, and capture automation remain unqualified. |
