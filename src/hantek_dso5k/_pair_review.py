@@ -8,7 +8,7 @@ import json
 import re
 
 from ._file_replay import CHUNK_BYTES, MAX_RX_BYTES, csv_request, decode_file_reply
-from ._receive import ReceiveStream
+from ._receive import ReceiveStream, ReceiveError
 from ._screens import write_json_new
 
 _PROFILES = {
@@ -80,8 +80,11 @@ def _transfer(channel, manifest_path, csv_path, evidence_dir, expected_sha256):
     preflight_report = {"recognized_status_frames": 0, "primary_frames_seen": 0}
     preflight_stream = ReceiveStream(lambda *args, **kwargs: None, preflight_report,
                                      primary_opcode=None, max_frame_bytes=0)
-    preflight_stream.feed(raw_files["preflight_rx.bin"], 1, 0.0, "offline-replay")
-    preflight_stream.finish()
+    try:
+        preflight_stream.feed(raw_files["preflight_rx.bin"], 1, 0.0, "offline-replay")
+        preflight_stream.finish()
+    except ReceiveError as exc:
+        raise PairReviewError(f"{channel}: invalid preflight framing") from exc
     if preflight_report["recognized_status_frames"] != report["preflight"].get("recognized_status_frames"):
         raise PairReviewError(f"{channel}: preflight status accounting differs")
 
@@ -93,8 +96,11 @@ def _transfer(channel, manifest_path, csv_path, evidence_dir, expected_sha256):
     parsed = {"recognized_status_frames": 0, "primary_frames_seen": 0}
     stream = ReceiveStream(lambda *args, **kwargs: None, parsed,
                            primary_opcode=0x90, max_frame_bytes=CHUNK_BYTES + 6)
-    stream.feed(wire, 1, 0.0, "offline-replay")
-    stream.finish()
+    try:
+        stream.feed(wire, 1, 0.0, "offline-replay")
+        stream.finish()
+    except ReceiveError as exc:
+        raise PairReviewError(f"{channel}: invalid response framing") from exc
     reconstructed, details = decode_file_reply(bytes(stream.file_wire), size, expected_sha256)
     csv = _read(csv_path, size)
     if len(csv) != size or csv != reconstructed:
