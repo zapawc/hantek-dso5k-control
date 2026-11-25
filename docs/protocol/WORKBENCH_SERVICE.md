@@ -47,6 +47,8 @@ Use the same bearer credential from the protected discovery file for both interf
 
 A cached preflight can reject incompatible settings or a stopped record. The worker rechecks fresh settings before device changes. Triggered jobs use the retained dual-channel 4K fixture profile. The `auto` route falls back only after a settled native response reports an unavailable analog record. Choose the result's selected method and named artifacts. Frozen fallback keeps the native-unavailable waveform response for evidence alongside the CSVs. Cancellation and external-trigger arm readiness are unsupported. Execution budgets are checked at command boundaries. An in-flight USB operation is never interrupted to meet a host deadline. Verified recovery can extend past that deadline. Unresolved state faults the worker and preserves evidence.
 
+The [ACQ-12 supervised fixture launch](../../fixtures/esp8266-event-generator/README.md) optionally exposes `hantek.external` on the same worker. It requires the operator's local fixture configuration and an observed Ready display fingerprint, and reports common-event provenance separately from calibrated timing. Both launch modes use the same device lease, queue and telemetry cache.
+
 The HTTP service rejects invalid Host and browser-origin headers, authenticates every supported route including artifacts, caps POST sizes and client concurrency, and keeps credentials out of its logs. The Windows discovery file grants access to the current account. The client uses loopback, bypasses proxies and refuses redirects. Processes running with equivalent user privileges share that trust boundary.
 
 ## Evidence and recovery
