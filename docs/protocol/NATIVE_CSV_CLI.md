@@ -19,13 +19,13 @@ The flags declare that the operator has verified the unit and original firmware,
 
 `--max-bytes` defaults to 89,566 and must be between 89,566 and 98,304. It is an admission ceiling for the fixed-size profile. Raising it does not permit a larger file. `--transfer-timeout` is in seconds and accepts only 12 for this profile. A shorter window could miss delayed unexpected bytes. Each raw RX window has a 102,400-byte cap inclusive of status traffic. Requests are aligned as needed to stay within that cap. The CLI uses a 12-second receive-only preflight and one 12-second window after the sole write. A fault may terminate observation early. There are no retries, resets, extra queries or file-enumeration operations.
 
-## Experimental CH2 offline candidate
+## Experimental CH2 single-file profile
 
 The proposed candidate adds `--experimental-ch2` and `--expected-sha256 HEX` for the exact `/mnt/udisk/WaveData164.csv` profile. Both options are required together for CH2 and reserved for that profile. The reference must be exactly 89,193 bytes and match the reviewed independent digest before the lease or claim. The pilot uses `--max-bytes 89193` and keeps the existing six confirmations and 12-second windows. Obtain the approved digest from local qualification evidence.
 
 CH2 requires 12 seconds of receive-only silence. Any preflight bytes, including an otherwise recognized S92, block transmission and stay in the raw evidence. The response still classifies exact S92 separately. Expect eight 10,208-byte data chunks, a 7,529-byte tail and one terminal, with independent SHA-256 verification before publication. Each invocation can attempt at most one S10 write with zero retries. The CH1 command, its default byte ceiling and its established preflight policy are unchanged.
 
-The immutable v0.2.0 prerelease supports CH1 only. CH2 is synthetic/offline-tested, the current file presence is unverified, and a live run requires a separately approved immutable candidate and reviewed command. Qualification of this single file would leave paired retrieval, arbitrary paths, automation and sample coherence unqualified.
+The immutable v0.2.0 prerelease supports CH1 only. The later ACQ-04 one-shot verified the exact CH2 profile on hardware at source `199b75c998b2261a99bf134c359e705fb26f14af`. Verify current file presence and close state before any separately approved new session. [Independent file evidence](PAIRED_CSV_ACQ05.md#decision-and-evidence) · [Later supervised paired qualification](PAIRED_CSV_ACQ08B.md#acq-08h-supervised-hardware-result)
 
 ## Result and diagnostics
 
@@ -45,7 +45,7 @@ The recognized S92 frame is recorded at the exact frame boundary, including USB 
 | One staged CH1 CSV through S10, byte count, terminal sum and independent SHA-256 | Hardware-qualified in DEV-06A predecessor and DEV-07 installed CLI, each for the bounded CH1 artifact; DEV-07 passed 2026-11-20 UTC |
 | S92 status classification and clean interface, lease and marker cleanup | S92 observed in DEV-06A predecessor; packaged DEV-07 S92 handling offline-tested (zero S92 observed live), packaged DEV-07 cleanup hardware-qualified on 2026-11-20 UTC |
 | Packaged retrieval orchestration, fragmented/coalesced notifications, failure paths and versioned JSON | Single bounded CH1 happy path hardware-qualified; additional timing, notification and failure cases remain offline regression and archive replay |
-| CH2 S10, back-to-back automated transfers or arbitrary paths/sizes | Unqualified |
+| Exact staged CH2 single file and supervised paired path | ACQ-04 verified the CH2 one-shot. ACQ-08H qualified one [experimental supervised pair](PAIRED_CSV_ACQ08B.md#acq-08h-supervised-hardware-result). Arbitrary paths, sizes and unattended operation remain unqualified. |
 | Remote CSV Save, SINGLE SEQ, external triggering, sample freshness and same-shot CH1/CH2 coherence | Outside the retrieval contract and unqualified |
 
 The DEV-07 live transfer manifest recorded `source_commit: null`; the staging log independently pins the tested checkout to `895c518eeb3cac8333bc5960fc2d3fdff0b6992d`. This distinction must be retained in reports and does not justify rerunning the device transfer.

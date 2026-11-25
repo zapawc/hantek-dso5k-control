@@ -1,6 +1,6 @@
 # ACQ-08B bounded S92 guard qualification candidate
 
-**Offline validation only. Hardware qualification pending.** The HANTEK-ADR-003 handoff authorizes one isolated candidate from PR #10. ACQ-07 remains the strict default. This candidate has no authority to access hardware or retire an interruption marker. [Issue #1](https://github.com/zapawc/hantek-dso5k-control/issues/1) · [PR #10](https://github.com/zapawc/hantek-dso5k-control/pull/10)
+**ACQ-08H passed one supervised session with the explicit experimental flag.** The strict ACQ-07 guard remains the default. Future live operation requires separate authorization. [Hardware result](#acq-08h-supervised-hardware-result) · [Issue #1](https://github.com/zapawc/hantek-dso5k-control/issues/1) · [PR #11](https://github.com/zapawc/hantek-dso5k-control/pull/11)
 
 ## Guard policy and outcomes
 
@@ -24,8 +24,22 @@ The explicitly selected experiment reports `schema_version: 0.2-s92-qualificatio
 
 Times are monotonic host read completions or computed deadlines, in seconds. The first observed byte time is recorded even for an invalid prefix. The final byte time and status classification are populated only for an accepted exact frame. Journal entries preserve API transfer boundaries, raw offsets, UTC evidence, and guard events. Aggregate success still requires both independently verified outputs, normal cleanup and manifest finalization. Consumers should check the aggregate status as well as per-channel attempt counts and released/marker flags. Existing single-file and passive schemas are untouched. The experimental schema and new exit code require architecture review before consumer adoption.
 
-## Prior art and next evidence
+## Prior art and offline replay
 
 ACQ-07H recorded one exact guard S92 about 2.973 seconds into the guard, after the complete CH1 response and independent hash validation. Offline replay of the recorded prefix retains the strict abort and verifies the experimental restart with a synthetic quiet suffix. That suffix has no corresponding hardware observation. HPA-P01/P02/P03 support exact framing and file decoding, HPA-S01/L01 support ownership and fail-closed evidence, and HPA-A01/A03 bound acquisition provenance. ACQ-08A identified overlapping firmware paths capable of emitting identical S92 bytes. A bounded quiet interval cannot identify the emitter or prove future silence. [Strict adapter contract](PAIRED_CSV_ACQ07.md) · [Prior-art index](../prior-art/INDEX.md)
 
-The minimum later qualification is one separately authorized supervised session. Resolve the retained ACQ-07H marker through a separately reviewed procedure, verify both references and fresh paths, rerun the passive preflight, and reconfirm exact closed files, original firmware, settled history, idle Save/Recall, stopped acquisition and exclusive ownership. In the existing documented PowerShell invocation enable `--experimental-s92-guard`, retain all six flags and require the operator to personally type `YES`. No extra acquisition or status commands, retries, firmware changes or resets. A guard without the target frame is inconclusive with zero CH2 writes. One passing targeted run remains limited to the observed conditions. Acquisition coherence remains `UNPROVEN`.
+## ACQ-08H supervised hardware result
+
+On 2026-11-24 WorkBench local time, one supervised DSO5102P session with retained firmware 3.40.0 (151009.0) passed at exact source commit [`9a7ef0aa301462c9728ff4d68c82df3ec533635c`](https://github.com/zapawc/hantek-dso5k-control/commit/9a7ef0aa301462c9728ff4d68c82df3ec533635c). The 12-second startup window was silent. CH1 completed its full 12-second response and independent validation before the guard began.
+
+| Observation | Result |
+| --- | --- |
+| Original guard | One exact `53 04 00 92 01 00 EA` at +1.853 seconds from guard start. Its origin remains unresolved. |
+| Restarted quiet | 12 fresh seconds elapsed without traffic. Total guard time was 13.854 seconds, within the 24-second cap. |
+| CH1 | 89,566 bytes, nine S90 data frames, terminal C3, zero response-phase S92. Published CSV and offline replay matched the independently approved SHA-256. |
+| CH2 | 89,193 bytes, nine S90 data frames, terminal 2F, one exact response-phase S92. Published CSV and offline replay matched the independently approved SHA-256. |
+| Attempts, publication and cleanup | One request per channel, two total attempts, zero retries. Both outputs published without replacement, interface and lease released, and the new marker cleared normally. The aggregate manifest reported PASS. |
+
+Architecture separately authorized retirement of the [ACQ-07H marker](PAIRED_CSV_ACQ07.md#acq-07h-supervised-guard-stop) before this run. The marker was archived under the cooperative lease and its bytes verified. The earlier offline replay of ACQ-07H used a synthetic quiet suffix because its hardware trace ended at S92. The ACQ-08H timing above came from hardware.
+
+Qualification covers those two existing completed files, the retained firmware, and the exact experimental policy on that Windows setup. Same-shot identity, acquisition coherence, fresh waveform capture, arbitrary paths, unattended reliability and automatic recovery remain unproven. S92 remains an observation of unresolved origin. Each future live session requires separate authorization.

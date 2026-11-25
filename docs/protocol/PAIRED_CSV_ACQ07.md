@@ -1,10 +1,14 @@
 # ACQ-07 supervised paired retrieval candidate
 
-Status **offline tested, live qualification pending explicit architecture approval**. The adapter targets the exact staged CH1 `/mnt/udisk/WaveData163.csv` (89,566 bytes) and CH2 `/mnt/udisk/WaveData164.csv` (89,193 bytes) profiles. Supply each independently approved reference digest at invocation.
+**ACQ-07H demonstrated the strict guard's protective stop on hardware.** The adapter targets the exact staged CH1 `/mnt/udisk/WaveData163.csv` (89,566 bytes) and CH2 `/mnt/udisk/WaveData164.csv` (89,193 bytes). Supply each independently approved reference digest at invocation. Future sessions require separate authorization.
+
+## ACQ-07H supervised guard stop
+
+At exact source [`a672dfca5288b7fde6f3ab8a9c6ef9a990b958d3`](https://github.com/zapawc/hantek-dso5k-control/commit/a672dfca5288b7fde6f3ab8a9c6ef9a990b958d3) on a DSO5102P with firmware 3.40.0 (151009.0), the strict 12-second startup was quiet and CH1 passed independent SHA-256 validation for 89,566 bytes. The strict inter-request guard received one exact seven-byte S92 at +2.973 seconds into the guard, or +14.979 seconds from CH1 write completion. The controller withheld both outputs and stopped before CH2. There was one attempt, zero retries, confirmed interface and lease release, and a retained marker. The aggregate status was ERROR. [ACQ-08H's later PASS](PAIRED_CSV_ACQ08B.md#acq-08h-supervised-hardware-result) exercised the explicitly selected experimental policy.
 
 ## Prior art and reuse
 
-HPA-P01/P02/P03 cover common framing, S10/S90 file decoding and the exact S92 classifier. HPA-S01/L01 cover Windows PnP and process census, the cooperative lease, WinUSB claim, journal and interruption marker. HPA-A01/A03 cover the staged-export workflow and separate acquisition provenance gap. ACQ-05 and ACQ-06 provide historical replay and injected session sequencing. The two hardware-qualified individual transfers do not establish an in-session sequence. The new adapter wires the injected controller to the existing `ClaimedBulkIO`, so polling translates PyUSB timeouts and writes retain the existing 2,000 ms timeout. Evidence from the smallest later hardware test is one supervised pair with exact existing files and independent references. [Issue #1](https://github.com/zapawc/hantek-dso5k-control/issues/1) · [ACQ-05](PAIRED_CSV_ACQ05.md) · [ACQ-06](PAIRED_CSV_ACQ06.md) · [Integration ADR](../adr/0001-cross-project-integration.md)
+HPA-P01/P02/P03 cover common framing, S10/S90 file decoding and the exact S92 classifier. HPA-S01/L01 cover Windows PnP and process census, the cooperative lease, WinUSB claim, journal and interruption marker. HPA-A01/A03 cover the staged-export workflow and separate acquisition provenance gap. ACQ-05 and ACQ-06 provide historical replay and injected session sequencing. The two hardware-qualified individual transfers do not establish an in-session sequence. The new adapter wires the injected controller to the existing `ClaimedBulkIO`, so polling translates PyUSB timeouts and writes retain the existing 2,000 ms timeout. ACQ-07H observed the strict guard stop on hardware. [Issue #1](https://github.com/zapawc/hantek-dso5k-control/issues/1) · [ACQ-05](PAIRED_CSV_ACQ05.md) · [ACQ-06](PAIRED_CSV_ACQ06.md) · [Integration ADR](../adr/0001-cross-project-integration.md)
 
 ## Passive preflight and proposed supervised invocation
 
@@ -55,6 +59,6 @@ The aggregate manifest and raw request and receive files share one fresh private
 
 The origin of S92 remains unresolved. Unknown or incorrectly placed traffic can stop the sequence. A silent guard demonstrates only what was observed during that window. Pair retrieval preserves `same_shot: null`, `acquisition_coherence: UNPROVEN` and `hardware_qualified: false` pending independent qualification. No retry or fallback is authorized after an ambiguous session.
 
-**ACTIVE USB OPERATIONS: 0**
+**Preserve the host and marker gates for each future session.**
 
-**LIVE PAIRED QUALIFICATION: NOT YET AUTHORIZED**
+**Future active sessions require separate authorization.**
