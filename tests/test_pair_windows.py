@@ -193,6 +193,19 @@ class PairWindowsTests(unittest.TestCase):
         self.assertEqual(events, ["lease", "claim", "release_interface", "release_lease"])
         windows.host_snapshot.assert_called_once()
 
+    def test_experimental_guard_is_explicit_and_active_only(self):
+        args = self.command_args("retrieve-pair")
+        with patch.object(windows, "retrieve_pair", return_value={"exit_code": 0}) as retrieve:
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(main(args), 0)
+                self.assertFalse(retrieve.call_args.kwargs["experimental_s92_guard"])
+                self.assertEqual(main([*args, "--experimental-s92-guard"]), 0)
+                self.assertTrue(retrieve.call_args.kwargs["experimental_s92_guard"])
+                with self.assertRaises(SystemExit) as error:
+                    main([*self.command_args("pair-preflight"), "--experimental-s92-guard"])
+                self.assertEqual(error.exception.code, 2)
+        windows.open_link.assert_not_called()
+
     def test_ownership_classifier_distinguishes_active_and_passive_module_invocations(self):
         def classify(action):
             return invocation_reason({"exe": "python.exe", "argv": [

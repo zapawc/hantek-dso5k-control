@@ -2,6 +2,7 @@
 from collections import deque
 from contextlib import contextmanager
 from hashlib import sha256
+from io import BytesIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,7 +12,9 @@ from unittest.mock import patch
 from hantek_dso5k._framing import STATUS, frame
 from hantek_dso5k._file_replay import CHUNK_BYTES, csv_request
 from hantek_dso5k._pair_session import PairBlocked, PairS10IO, PairSpec, PROFILES, simulate_pair
+from hantek_dso5k._receive import ReceiveError
 from hantek_dso5k._retrieve import CONFIRMATIONS
+from hantek_dso5k._s92_guard import observe_qualification_guard, qualification_guard_result
 
 
 class Timeout(Exception):
@@ -92,7 +95,8 @@ class PairSessionTests(unittest.TestCase):
         self.interface_failure = False
         self.lease_failure = False
 
-    def execute(self, *, confirmations=CONFIRMATIONS, specs=None, marker=None, evidence=None):
+    def execute(self, *, confirmations=CONFIRMATIONS, specs=None, marker=None, evidence=None,
+                experimental_s92_guard=False):
         link = self.link
         test = self
 
@@ -126,7 +130,8 @@ class PairSessionTests(unittest.TestCase):
                              confirmations=confirmations, hold=hold,
                              census=lambda: {"devices": []},
                              claim=claim, assess=lambda *args: {"blocked": None},
-                             clock=Clock(), marker=marker or self.marker)
+                             clock=Clock(), marker=marker or self.marker,
+                             experimental_s92_guard=experimental_s92_guard)
 
     def test_success_one_claim_two_writes_clean_marker_and_exact_output(self):
         result = self.execute()
@@ -341,6 +346,217 @@ class PairSessionTests(unittest.TestCase):
         self.assertEqual(result["exit_code"], 0, result)
         self.assertGreaterEqual(self.link.clock, 48)
         self.assertLess(self.link.clock, 50)
+
+    def scripted_guard(self, events, *, overrun=False, timeout_overrun=False):
+        """Deliver relative host-read completions only while CH1 owns the guard."""
+        original = self.link.read
+        script = deque(events)
+        guard_start = None
+
+        def read(size, *, timeout_ms):
+            nonlocal guard_start
+            if len(self.link.writes) != 1 or not self.link.guarding:
+                return original(size, timeout_ms=timeout_ms)
+            if guard_start is None:
+                guard_start = self.link.clock
+            until = self.link.clock + timeout_ms / 1000
+            if script and (overrun or guard_start + script[0][0] <= until):
+                delay, payload = script.popleft()
+                self.link.clock = guard_start + delay
+                if isinstance(payload, BaseException):
+                    raise payload
+                return payload
+            if timeout_overrun and not script:
+                until += 0.010
+            self.link.clock = until
+            raise TimeoutError()
+
+        self.link.read = read
+
+    def check_guard_failure(self, events, reason, **transport):
+        self.scripted_guard(events, **transport)
+        result = self.execute(experimental_s92_guard=True)
+        guard = result["inter_request_guard"]
+        self.assertEqual(result["status"], "ERROR", result)
+        self.assertEqual(result["error"]["stage"], "inter_request_guard")
+        self.assertEqual(guard["outcome"], "FAIL")
+        self.assertIn(reason, guard["stop_reason"])
+        self.assertEqual(result["request_attempts"], 1)
+        self.assertEqual(self.link.writes, [csv_request("WaveData163.csv")])
+        self.assertEqual(result["channels"]["CH2"]["request_attempts"], 0)
+        self.assertTrue(result["cleanup"]["lease_released"])
+        self.assertTrue(result["cleanup"]["interface_released"])
+        self.assertEqual(result["marker"], "RETAINED")
+        self.assertTrue(self.marker.is_file())
+        self.assertFalse(any(spec.output.exists() for spec in self.specs))
+        self.assertFalse((self.evidence / "CH2_request_attempt.bin").exists())
+        return guard
+
+    def check_guard_success(self, events, first, final):
+        self.scripted_guard(events)
+        result = self.execute(experimental_s92_guard=True)
+        guard = result["inter_request_guard"]
+        self.assertEqual(result["status"], "PASS", result)
+        self.assertEqual(result["schema_version"], "0.2-s92-qualification")
+        self.assertEqual(guard["policy"], "experimental_single_s92_restart")
+        self.assertEqual(guard["classification"], "transfer_status_origin_unresolved")
+        self.assertEqual(guard["outcome"], "CH2_ELIGIBLE")
+        self.assertEqual(guard["recognized_status_frames"], 1)
+        self.assertAlmostEqual(guard["first_byte_observed"] - guard["original_start"], first)
+        self.assertAlmostEqual(guard["final_byte_observed"] - guard["original_start"], final)
+        self.assertEqual(guard["quiet_start"], guard["final_byte_observed"])
+        self.assertEqual(guard["quiet_deadline"], guard["quiet_start"] + 12)
+        self.assertEqual(guard["original_deadline"], guard["original_start"] + 12)
+        self.assertEqual(guard["absolute_deadline"], guard["original_start"] + 24)
+        self.assertIsNone(guard["stop_reason"])
+        self.assertEqual(result["request_attempts"], 2)
+        self.assertEqual(result["retries"], 0)
+        self.assertFalse(self.marker.exists())
+        self.assertTrue(all(spec.output.is_file() for spec in self.specs))
+        return guard
+
+    def test_experimental_guard_at_acq07h_host_relative_timing(self):
+        # Exact frame and timing from the documented run, with synthetic file payloads.
+        self.check_guard_success([(2.9731583, STATUS)], 2.9731583, 2.9731583)
+
+    def test_experimental_guard_early_middle_late(self):
+        for when in (0.001, 6.0, 11.9):
+            with self.subTest(when=when):
+                self.setUp()
+                self.check_guard_success([(when, STATUS)], when, when)
+
+    def test_experimental_guard_fragmentation_at_each_boundary(self):
+        for offset in range(1, len(STATUS)):
+            with self.subTest(offset=offset):
+                self.setUp()
+                self.check_guard_success([(2, STATUS[:offset]), (3, STATUS[offset:])], 2, 3)
+
+    def test_experimental_guard_all_bytes_separately(self):
+        self.check_guard_success([(float(i + 1), bytes([value])) for i, value in enumerate(STATUS)], 1, 7)
+
+    def test_experimental_guard_clean_is_inconclusive_with_normal_cleanup(self):
+        result = self.execute(experimental_s92_guard=True)
+        self.assertEqual((result["status"], result["exit_code"]), ("INCONCLUSIVE", 7))
+        self.assertEqual(result["inter_request_guard"]["outcome"], "INCONCLUSIVE")
+        self.assertEqual(result["channels"]["CH2"]["request_attempts"], 0)
+        self.assertEqual(len(self.link.writes), 1)
+        self.assertTrue(result["cleanup"]["interface_released"])
+        self.assertTrue(result["cleanup"]["lease_released"])
+        self.assertEqual(result["marker"], "CLEARED")
+        self.assertFalse(self.marker.exists())
+        self.assertFalse(any(spec.output.exists() for spec in self.specs))
+        self.assertEqual(json.loads((self.evidence / "pair_manifest.json").read_text()), result)
+
+    def test_experimental_guard_rejects_trailing_and_coalesced_duplicate_bytes(self):
+        for suffix in (b"X", STATUS):
+            with self.subTest(suffix=suffix):
+                self.setUp()
+                guard = self.check_guard_failure([(2, STATUS + suffix)], "expected only one exact S92")
+                self.assertEqual(guard["recognized_status_frames"], 0)
+
+    def test_experimental_guard_rejects_each_nonmatching_field(self):
+        for offset in range(len(STATUS)):
+            with self.subTest(offset=offset):
+                self.setUp()
+                altered = bytes(value ^ (i == offset) for i, value in enumerate(STATUS))
+                self.check_guard_failure([(2, altered)], "expected only one exact S92")
+
+    def test_experimental_guard_rejects_duplicate_or_other_restarted_traffic(self):
+        for payload in (STATUS, b"X", STATUS[:1]):
+            with self.subTest(payload=payload):
+                self.setUp()
+                guard = self.check_guard_failure([(2, STATUS), (3, payload)], "restarted quiet")
+                self.assertEqual(guard["recognized_status_frames"], 1)
+
+    def test_experimental_guard_does_not_scan_past_wrong_marker(self):
+        self.check_guard_failure([(2, b"X" + STATUS)], "expected only one exact S92")
+
+    def test_experimental_guard_rejects_incomplete_frame(self):
+        self.check_guard_failure([(2, STATUS[:-1])], "incomplete S92")
+
+    def test_experimental_guard_rejects_completion_beyond_original_deadline(self):
+        self.check_guard_failure([(11.9, STATUS[:2]), (12.01, STATUS[2:])],
+                                 "original guard deadline", overrun=True)
+
+    def test_experimental_guard_rejects_transport_overrun_beyond_absolute_deadline(self):
+        self.check_guard_failure([(12, STATUS), (24.01, b"X")],
+                                 "absolute inter-request guard deadline", overrun=True)
+
+    def test_experimental_guard_rejects_timeout_overrun_beyond_absolute_deadline(self):
+        self.check_guard_failure([(12, STATUS)], "absolute inter-request guard deadline",
+                                 timeout_overrun=True)
+
+    def test_experimental_guard_requires_final_quiet_poll_after_journal_stall(self):
+        clock = lambda: self.link.clock
+        self.link.read = lambda *args, **kwargs: STATUS
+
+        def log(event, **fields):
+            if event == "recognized_status":
+                self.link.clock += 12
+
+        report = qualification_guard_result()
+        with self.assertRaisesRegex(ReceiveError, "without a final receive poll"):
+            observe_qualification_guard(self.link, clock, BytesIO(), log, report)
+        self.assertEqual(report["outcome"], "FAIL")
+        self.assertEqual(self.link.writes, [])
+
+    def test_experimental_guard_rejects_non_timeout_and_cancellation_in_both_phases(self):
+        for after_status in (False, True):
+            for factory, reason in ((lambda: OSError("disconnected"), "disconnected"),
+                                    (KeyboardInterrupt, "KeyboardInterrupt")):
+                with self.subTest(after_status=after_status, reason=reason):
+                    self.setUp()
+                    events = [(1, STATUS)] if after_status else []
+                    self.check_guard_failure([*events, (2, factory())], reason)
+
+    def test_experimental_guard_cleanup_fault_during_inconclusive_path(self):
+        for resource in ("interface", "lease"):
+            with self.subTest(resource=resource):
+                self.setUp()
+                setattr(self, resource + "_failure", True)
+                result = self.execute(experimental_s92_guard=True)
+                self.assertEqual(result["status"], "ERROR")
+                self.assertEqual(result["error"]["stage"], resource + "_cleanup")
+                self.assertEqual(result["channels"]["CH2"]["request_attempts"], 0)
+                self.assertEqual(len(self.link.writes), 1)
+                self.assertEqual(result["marker"], "RETAINED")
+                self.assertFalse(result["cleanup"][resource + "_released"])
+                self.assertFalse(any(spec.output.exists() for spec in self.specs))
+
+    def test_experimental_qualification_still_rejects_startup_s92(self):
+        self.link.preflight.append(STATUS)
+        result = self.execute(experimental_s92_guard=True)
+        self.assertEqual(result["inter_request_guard"]["outcome"], "NOT_RUN")
+        self.assertEqual(result["error"]["stage"], "preflight")
+        self.assertEqual(self.link.writes, [])
+        self.assertEqual(result["marker"], "RETAINED")
+
+    def test_experimental_guard_publication_fault_after_two_valid_transfers(self):
+        from hantek_dso5k._pair_session import publish_file
+
+        def publish(path, data, digest):
+            if path == self.specs[1].output:
+                raise OSError("disk full")
+            return publish_file(path, data, digest)
+
+        self.scripted_guard([(3, STATUS)])
+        with patch("hantek_dso5k._pair_session.publish_file", side_effect=publish):
+            result = self.execute(experimental_s92_guard=True)
+        self.assertEqual(result["error"]["stage"], "publish")
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["request_attempts"], 2)
+        self.assertEqual(result["marker"], "CLEARED")
+        self.assertTrue(result["channels"]["CH1"]["output_published"])
+        self.assertEqual(self.specs[0].output.read_bytes(), self.data["CH1"])
+        self.assertFalse(result["channels"]["CH2"]["output_published"])
+        self.assertFalse(self.specs[1].output.exists())
+
+    def test_strict_manifest_has_legacy_guard_shape(self):
+        result = self.execute()
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["schema_version"], "0.1-offline")
+        self.assertEqual(set(result["inter_request_guard"]),
+                         {"complete", "raw_bytes", "recognized_status_frames", "primary_frames_seen"})
 
     def test_controller_refuses_live_defaults(self):
         with self.assertRaises(PairBlocked):
