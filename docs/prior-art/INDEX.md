@@ -25,6 +25,12 @@ These classifications may coexist. A tested predecessor can support reuse while 
 
 ## Acquisition
 
+**ACQ-11 Workbench automated workflow (HPA-P01/P03/P04, HPA-A02/A03, HPA-S01/S02).** Reuses the retained Windows layer, strict native decoder, bounded status handling and interruption finalization. Uses scoped fresh settings patches and software SINGLE in the declared probe fixture. Voltage confidence remains separate from waveform retrieval and fixture restoration. [Workflow](../protocol/NATIVE_WAVEFORM_ACQ11.md) · [ADR-006](../adr/0006-workbench-acquisition-development.md)
+
+**ACQ-10C supervised native adapter (HPA-P01/P03, HPA-A02/A03, HPA-S01, HPA-L01).** Offline adapter and simulated evidence for one exact S02 write under existing Windows ownership controls. ACQ-10B established that the firmware bounds returning write calls while device-side blocking and recovery remain unresolved. ADR-005 records the scoped risk acceptance process. [Supervised procedure](../protocol/NATIVE_WAVEFORM_ACQ10C.md) · [Proportionate qualification ADR](../adr/0005-proportionate-instrument-qualification.md)
+
+**ACQ-10A native waveform foundation (HPA-P01/P03, HPA-A02/A03, HPA-S02).** Offline source-4 S82 replay validates ordered waveform slots, exact counts and terminal framing. The version 1 host result preserves wire, scaling and measurement outcomes separately. Retained-firmware static dispatch matches the candidate grammar. Device-side buffer mutation, borrowed-buffer lifetime and writer progress keep native hardware qualification on HOLD. [Native waveform foundation](../protocol/NATIVE_WAVEFORM_ACQ10A.md)
+
 **ACQ-08B experimental guard (HPA-P01/P02/P03, HPA-S01/L01, HPA-A01/A03).** ACQ-08H passed one supervised sequential retrieval after one guard S92 and a fresh quiet interval on the pinned source and retained firmware. Strict silence remains the default. Acquisition coherence and unattended reliability remain unproven. [ACQ-08H result](../protocol/PAIRED_CSV_ACQ08B.md#acq-08h-supervised-hardware-result) · [Selective reuse ADR](../adr/0004-qualified-baseline-and-selective-reuse.md)
 
 **ACQ-07 adapter candidate (HPA-P01/P02/P03, HPA-A01/A03, HPA-S01/L01).** Reuses ACQ-06 sequential timing and the existing Windows ownership and byte-transport stack. Passive preflight and synthetic tests cover the adapter. ACQ-07H observed the protective guard stop on hardware. S92 origin and acquisition coherence remain unverified. [ACQ-07 design and failure matrix](../protocol/PAIRED_CSV_ACQ07.md)
