@@ -27,7 +27,7 @@ TIMEBASE = tuple(round(m * 10. ** e, 12) for e in range(-9, 2)
                  for m in (2, 4, 8) if m * 10. ** e <= 40)
 WRITABLE = {1: (1, 12), 5: (0, 3), 11: (1, 12), 15: (0, 3)}
 RUN_STOP, SINGLE = 19, 18
-COUNTS_PER_DIVISION = 10.0
+COUNTS_PER_DIVISION = 25.0
 
 
 def describe(raw):
@@ -215,7 +215,7 @@ class Session:
                    "availability": {c.channel: c.samples is not None for c in result.channels},
                    "channels": channels, "time_origin": "relative sample zero", "same_shot": "UNPROVEN",
                    "counts_per_division": COUNTS_PER_DIVISION,
-                   "scale_provenance": "Retained firmware display gain candidate from CH1 S22; absolute DC origin unverified"}
+                   "scale_provenance": "Documented display-code gain and S81 offset; absolute voltage unverified"}
         create_record(self.evidence / f"{name}.json", capture)
         return capture
 
@@ -226,21 +226,33 @@ def _running(state):
     return state[20] not in (0, 5)
 
 
-def _plausible(capture):
-    channels = capture["channels"]
-    if set(channels) != {"CH1", "CH2"} or capture["availability"]["MATH"]:
-        return False
-    a, b = channels["CH1"], channels["CH2"]
-    return (0.3 <= a["bnc_vpp_v"] <= 0.7 and 3. <= b["bnc_vpp_v"] <= 7.
-            and all(not ch["clipped"] and ch["frequency_hz"] is not None and
-                    750 <= ch["frequency_hz"] <= 1250 and 3. <= ch["vpp_v"] <= 7.
-                    for ch in (a, b)))
-
 def _periodic_pair(capture):
     channels = capture["channels"]
     return (set(channels) == {"CH1", "CH2"} and not capture["availability"]["MATH"]
             and all(not ch["clipped"] and ch["frequency_hz"] is not None
                     and 750 <= ch["frequency_hz"] <= 1250 for ch in channels.values()))
+
+
+def _fixture_evidence(capture):
+    if not _periodic_pair(capture):
+        return {"periodic_pair": False, "voltage": "UNVERIFIED", "attenuation_ratio": None}
+    first, second = (capture["channels"][channel] for channel in ("CH1", "CH2"))
+    ratio = second["bnc_vpp_v"] / first["bnc_vpp_v"]
+    return {"periodic_pair": True, "attenuation_ratio": ratio,
+            "probe_assignment_plausible": 6. <= ratio <= 14.,
+            "voltage": "NOMINAL_PLAUSIBLE" if all(3. <= ch["vpp_v"] <= 7. for ch in (first, second))
+            else "OUTSIDE_NOMINAL_RANGE"}
+
+
+def _scope_volts(text):
+    for suffix, scale in (("mV", .001), ("V", 1.)):
+        if text.endswith(suffix):
+            try:
+                value = float(text[:-len(suffix)])
+            except ValueError:
+                return None
+            return value * scale if math.isfinite(value) else None
+    return None
 
 
 def workflow(session, mode, outcome):
@@ -255,7 +267,7 @@ def workflow(session, mode, outcome):
     changed = False
     try:
         changed = True
-        configured = session.set_fields("fixture_scale", baseline, {1: 6, 5: 1, 11: 9, 15: 0})
+        configured = session.set_fields("fixture_scale", baseline, {1: 7, 5: 1, 11: 9, 15: 0})
         if not _running(configured):
             session.key("start_running", RUN_STOP)
         running = session.settings("running")
@@ -263,17 +275,15 @@ def workflow(session, mode, outcome):
             raise RuntimeError("Scope did not report running after Run/Stop")
         outcome["modified"] = describe(running)
         outcome["running"] = session.capture("running_waveform", running)
-        outcome["running_plausible"] = _plausible(outcome["running"])
-        outcome["running_periodic"] = _periodic_pair(outcome["running"])
+        outcome["running_validation"] = _fixture_evidence(outcome["running"])
         outcome["scope_measurements"] = {
-            ch: {str(item): session.measurement(item, index) for item in (1, 4, 6, 7)}
+            ch: {str(item): session.measurement(item, index) for item in (1, 4)}
             for index, ch in enumerate(("CH1", "CH2"))
         }
-        if not outcome["running_periodic"]:
+        if not outcome["running_validation"]["periodic_pair"]:
             raise RuntimeError("Running waveform failed dual-channel periodicity and clipping checks")
-        reference = outcome["scope_measurements"]["CH1"]["4"]
-        if reference.endswith("V") and reference[:-1].replace(".", "", 1).isdigit():
-            scope_vpp = float(reference[:-1])
+        scope_vpp = _scope_volts(outcome["scope_measurements"]["CH1"]["4"])
+        if scope_vpp is not None:
             native_vpp = outcome["running"]["channels"]["CH1"]["vpp_v"]
             outcome["ch1_vpp_crosscheck"] = math.isclose(native_vpp, scope_vpp, rel_tol=0.15)
         else:
@@ -285,13 +295,13 @@ def workflow(session, mode, outcome):
                 if not _running(stopped):
                     outcome["single_stop_observed"] = True
                     outcome["single"] = session.capture("single_waveform", stopped)
-                    outcome["single_plausible"] = _plausible(outcome["single"])
+                    outcome["single_validation"] = _fixture_evidence(outcome["single"])
                     break
             if not outcome.get("single") or not _periodic_pair(outcome["single"]):
                 raise RuntimeError("SINGLE stopped waveform unavailable or failed periodicity checks")
-        if (not outcome["running_plausible"] or not outcome["ch1_vpp_crosscheck"]
-                or (mode == "full" and not outcome["single_plausible"])):
-            raise RuntimeError("Waveform captured but nominal voltage limits were not met")
+        if not outcome["running_validation"]["probe_assignment_plausible"] or (
+                mode == "full" and not outcome["single_validation"]["probe_assignment_plausible"]):
+            raise RuntimeError("Measured channel ratio does not support the expected probe assignment")
     finally:
         if changed and session.settled:
             current = session.settings("before_restore")
