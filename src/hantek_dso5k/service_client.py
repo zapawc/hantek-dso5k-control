@@ -44,6 +44,7 @@ def main(argv=None):
                                               "job", "artifact", "shutdown"))
     parser.add_argument("--path", choices=("auto", "native", "frozen"), default="auto")
     parser.add_argument("--allow-overwrite", action="store_true")
+    parser.add_argument("--configure-fixture", action="store_true", help="Explicit S22 comparison with verified fixture edits")
     parser.add_argument("--job-id")
     parser.add_argument("--artifact")
     parser.add_argument("--output", type=Path)
@@ -55,6 +56,8 @@ def main(argv=None):
             payload = {"kind": operation}
             if operation == "triggered":
                 payload.update(path=args.path, allow_overwrite=args.allow_overwrite)
+            elif operation == "s22-probe":
+                payload["configure_fixture"] = args.configure_fixture
             result = client.json("jobs", payload)
         elif operation in ("run", "stop"):
             result = client.json("jobs", {"kind": "run-state", "running": operation == "run",

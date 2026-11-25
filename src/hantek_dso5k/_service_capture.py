@@ -2,7 +2,7 @@
 
 from hashlib import sha256
 
-from ._acq11 import RUN_STOP, SINGLE, _running, describe, restore_settings
+from ._acq11 import RUN_STOP, SINGLE, _running, analyze, describe, restore_settings
 from ._native_finalization import create_record
 from ._retrieve import file_record
 from .acquisition import build_native_result
@@ -11,6 +11,9 @@ from .native_waveform import decode_native_waveform
 
 class Unsupported(ValueError):
     """A capture precondition failed without leaving unsettled state."""
+
+
+FIXTURE_EDITS = {1: 7, 5: 1, 11: 9, 15: 0}
 
 
 def instrument():
@@ -24,11 +27,13 @@ def snapshot(session, raw, job_id):
     cfg = describe(raw)
     cfg["s81_sha256"] = sha256(raw).hexdigest()
     cfg["channel_scaling"] = {}
-    divisions = 16 if cfg["menu_visible"] else 19.2
+    derived = {}
+    divisions = 16
     for channel in decoded.channels:
         scale = cfg["channels"].get(channel.channel)
         if (not channel.samples or not scale or scale["bnc_v_per_div"] is None
-                or raw[160] != 15 or raw[162] != 0 or raw[179] != 0 or raw[185] != 0 or raw[188] != 0):
+                or raw[160] != 15 or raw[162] != 0 or raw[179] != 0 or raw[185] != 0
+                or raw[188] != 0 or not cfg["menu_visible"]):
             continue
         dt = cfg["seconds_per_division"] * divisions / len(channel.samples)
         cfg["channel_scaling"][channel.channel] = {
@@ -38,14 +43,24 @@ def snapshot(session, raw, job_id):
             "sample_interval_s": dt, "time_origin_s": 0, "time_reference": "relative first display sample",
             "verified": True, "provenance": "ACQ-11 fixture S81 mapping with configured software probe factor",
         }
+        _, metrics = analyze(channel.samples, bncvdiv=scale["bnc_v_per_div"], probe=scale["software_probe"],
+                             offset=scale["vertical_position_counts"], interval=dt)
+        derived[channel.channel] = {
+            "source": "native_waveform", "uses_configured_probe_factor": True,
+            **{key: metrics[key] for key in ("min_v", "max_v", "vpp_v", "mean_v",
+                                             "frequency_hz", "period_s", "duty_cycle", "clipped")},
+        }
     source = session.evidence / f"{session.count:03d}-snapshot.rx"
+    timing = session.last_timing if isinstance(session.last_timing, dict) else None
     result = build_native_result(
         [wire], selector=4, run_id=job_id, instrument=instrument(), configuration_snapshot=cfg,
+        timing=timing,
         artifacts=[{"role": "raw_s82", "locator": source.name, **file_record(source)}],
     )
     create_record(session.evidence / "waveform.json", result)
     return {"method": "native_s02", "status_offsets": list(decoded.status_offsets),
             "availability": {slot.channel: slot.samples is not None for slot in decoded.channels},
+            "derived_measurements": derived,
             "same_shot": "UNPROVEN"}
 
 
@@ -65,7 +80,7 @@ def triggered(session, baseline, job_id, request, result, restoration_required):
         raise Unsupported("SINGLE can overwrite the existing stopped acquisition. Supply allow_overwrite=true")
     restoration_required(True)
     try:
-        state = session.set_fields("fixture_scale", baseline, {1: 7, 5: 1, 11: 9, 15: 0})
+        state = session.set_fields("fixture_scale", baseline, FIXTURE_EDITS)
         if not _running(state):
             session.key("start_running", RUN_STOP)
             if not _running(session.settings("running")):
@@ -112,3 +127,27 @@ def set_run_state(session, baseline, request, result, restoration_required):
         raw = baseline
     result["restored_raw"] = raw
     result["settings"] = describe(raw)
+
+
+def s22_probe(session, baseline, request, result, restoration_required):
+    configure = request.get("configure_fixture", False)
+    if configure:
+        verify_profile(baseline, "auto")
+        if not _running(baseline):
+            raise Unsupported("The configured S22 comparison requires an explicitly running scope")
+        restoration_required(True)
+    try:
+        if configure:
+            configured = session.set_fields("probe_fixture_scale", baseline, FIXTURE_EDITS)
+            if not _running(configured):
+                raise Unsupported("Scope did not stay running after the fixture edits")
+            result["configured"] = describe(configured)
+        result["reads"] = [
+            {"source": source, "mode": mode, "item": item,
+             "display": session.measurement(item, source, mode=mode)}
+            for mode in (0, 1) for source in (0, 1) for item in (1, 4)
+        ]
+    finally:
+        if configure and session.settled:
+            result["restored_raw"] = restore_settings(session, baseline, result)
+            restoration_required(False)

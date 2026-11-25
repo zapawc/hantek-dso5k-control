@@ -22,7 +22,7 @@ from ._host import assess_host, finalization_guard, host_snapshot, lease, requir
 from ._native_finalization import create_record, prepare, publish
 from ._pair_windows import _claim_pair, _source_commit
 from ._retrieve import file_record, record_cleanup
-from ._service_capture import Unsupported, instrument, set_run_state, snapshot, triggered
+from ._service_capture import Unsupported, instrument, s22_probe, set_run_state, snapshot, triggered
 from ._session import state_path
 
 
@@ -50,7 +50,7 @@ def measurement_value(text, units):
     if value == 0:
         # The retained device has returned formatted zero for a missing channel cache.
         return None, "zero_unverified"
-    if (units in ("Hz", "s") or match[1].startswith("-") and units != "V") and value <= 0:
+    if units != "V" and value < 0:
         return None, "invalid_display_value"
     return value, None
 
@@ -75,6 +75,7 @@ class Service:
         self.poll_count = 0
         self.resume_count = 0
         self.started = clock()
+        self.refresh_after = self.started
 
     def status(self):
         with self.changed:
@@ -94,12 +95,14 @@ class Service:
             results = []
             for original in self.cache.values():
                 row = deepcopy(original)
-                row["transport_age_s"] = max(0., now - row.pop("received_monotonic"))
+                observed = row.pop("received_monotonic")
+                row["transport_age_s"] = max(0., now - observed)
                 row["configuration_current"] = row["configuration"]["stable_sha256"] == self.settings["stable_sha256"]
                 row["stale"] = (self.state != "MONITORING" or row["transport_age_s"] > self.stale_after
-                                or not row["configuration_current"])
+                                or not row["configuration_current"] or observed < self.refresh_after)
                 if row["last_good"] is not None:
                     row["last_good"]["age_s"] = max(0., now - row["last_good"].pop("received_monotonic"))
+                    row["last_good"]["stale"] = row["stale"] or not row["available"]
                 results.append(row)
             return {"schema": STATUS_SCHEMA, "instrument": instrument(), "state": self.state,
                     "connected": self.connected, "error": self.error, "measurements": results}
@@ -152,6 +155,8 @@ class Service:
         if settings["channels"][channel]["enabled"]:
             raw = session.measurement(code, CHANNELS.index(channel))
             value, reason = measurement_value(raw, units)
+            if kind == "vpp" and value is not None and value < 0:
+                value, reason = None, "invalid_display_value"
         now = self.clock()
         configuration = {key: settings[key] for key in ("s81_sha256", "stable_sha256", "observed_at")}
         configuration["channel"] = settings["channels"][channel]
@@ -183,6 +188,7 @@ class Service:
         session.evidence = dest
         result = {"same_shot": "UNPROVEN", "kind": request["kind"]}
         error = None
+        fatal = None
         started = self.clock()
         try:
             baseline = session.settings("job_initial")
@@ -194,15 +200,11 @@ class Service:
             elif request["kind"] == "run-state":
                 set_run_state(session, baseline, request, result, self._requires_restore)
             else:
-                result["reads"] = [
-                    {"source": source, "mode": mode, "item": item,
-                     "display": session.measurement(item, source, mode=mode)}
-                    for mode in (0, 1) for source in (0, 1) for item in (1, 4)
-                ]
-        except Exception as exc:
+                s22_probe(session, baseline, request, result, self._requires_restore)
+        except (Exception, KeyboardInterrupt) as exc:
             error = {"type": type(exc).__name__, "detail": str(exc)}
             if self.restoration_owed or not session.settled:
-                raise
+                fatal = exc
         finally:
             raw = result.pop("restored_raw", None)
             if raw is not None:
@@ -212,9 +214,7 @@ class Service:
                          and entry.suffix in (".json", ".csv")}
             result.update(artifacts=artifacts, error=error, duration_s=self.clock() - started)
             create_record(dest / "result.json", result)
-            with self.changed:
-                job = self.jobs[job_id]
-                job.update(state="SUCCEEDED" if error is None else "FAILED", ended_at=utc(), result=result)
+        return result, fatal
 
     def loop(self, session):
         index, next_poll = 0, self.clock()
@@ -238,13 +238,18 @@ class Service:
                 index = (index + 1) % len(self.sensors)
                 next_poll = self.clock() + self.interval
             else:
-                self._perform(session, job_id)
+                result, fatal = self._perform(session, job_id)
                 index, next_poll = 0, self.clock()
                 with self.changed:
+                    job = self.jobs[job_id]
+                    job.update(state="FAILED" if result["error"] else "SUCCEEDED", ended_at=utc(), result=result)
                     self.active = None
-                    if not self.stopping:
+                    if not self.stopping and fatal is None:
                         self.resume_count += 1
+                        self.refresh_after = self.clock()
                         self.state = "MONITORING"
+                if fatal is not None:
+                    raise fatal
 
     def worker(self, connect):
         try:
@@ -311,10 +316,15 @@ def parse_job(payload):
     if not isinstance(payload, dict):
         raise ValueError("Expected JSON object")
     kind = payload.get("kind")
-    if kind == "snapshot" or kind == "s22-probe":
+    if kind == "snapshot":
         if set(payload) != {"kind"}:
             raise ValueError("Unexpected fields")
         return payload
+    if kind == "s22-probe":
+        configure = payload.get("configure_fixture", False)
+        if set(payload) - {"kind", "configure_fixture"} or type(configure) is not bool:
+            raise ValueError("Expected optional boolean configure_fixture")
+        return {"kind": kind, "configure_fixture": configure}
     if kind == "triggered":
         path = payload.get("path", "auto")
         overwrite = payload.get("allow_overwrite", False)
@@ -413,8 +423,9 @@ class LocalHandler(BaseHTTPRequestHandler):
                 raise ValueError("Request body exceeds bounds or is absent")
             payload = json.loads(self.rfile.read(size))
             if self.path == "/v1/shutdown" and payload == {}:
+                self._json(202, {"state": "STOPPING"})
                 self.server.service.shutdown()
-                return self._json(202, {"state": "STOPPING"})
+                return
             if self.path == "/v1/jobs":
                 return self._json(202, self.server.service.submit(parse_job(payload)))
         except Unsupported as exc:

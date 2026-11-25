@@ -181,6 +181,7 @@ class Session:
         self.link, self.evidence, self.journal, self.clock = link, evidence, journal, clock
         self.count = 0
         self.settled = True
+        self.last_timing = None
 
     def log(self, event, **fields):
         self.journal.write(json.dumps({"event": event, "utc": utc(), "monotonic": self.clock(),
@@ -201,10 +202,13 @@ class Session:
         stem.with_suffix(".tx").write_bytes(request)
         self.count += 1
         self.settled = False
+        self.last_timing = None
         self.log("write_attempt", command=name, bytes=request.hex(" "))
         with stem.with_suffix(".rx").open("xb") as stream:
             written = self.link.write(request)
             started = self.clock()
+            write_time = {"utc": utc(), "monotonic_s": started}
+            first_time = None
             self.log("write_completed", command=name, bytes=written, completed=started)
             if written != len(request):
                 raise RuntimeError(f"Short {name} write")
@@ -216,6 +220,8 @@ class Session:
                 except TimeoutError:
                     continue
                 completed = self.clock()
+                if first_time is None:
+                    first_time = {"utc": utc(), "monotonic_s": completed}
                 stream.write(received)
                 self.log("receive", command=name, bytes=len(received), completed=completed)
                 if not received or stream.tell() > limit or completed > deadline:
@@ -246,6 +252,9 @@ class Session:
         self.log("settled_response", command=name, status_offsets=statuses, primary_frames=len(primary),
                  write_to_last_byte_s=last_byte - started, observation_s=self.clock() - started,
                  quiet_tail_s=deadline - last_byte)
+        self.last_timing = {"clock_context": "Windows/Python perf_counter; host UTC",
+                            "request_write": write_time, "receive_first": first_time,
+                            "receive_end": {"utc": utc(), "monotonic_s": self.clock()}}
         self.settled = True
         if file_bytes is not None:
             return content
