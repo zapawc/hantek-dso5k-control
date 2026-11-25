@@ -41,10 +41,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path)
     parser.add_argument("operation", choices=("status", "settings", "measurements", "capabilities",
-                                              "snapshot", "triggered", "run", "stop", "s22-probe",
+                                              "snapshot", "triggered", "external", "run", "stop", "s22-probe",
                                               "job", "artifact", "shutdown"))
     parser.add_argument("--path", choices=("auto", "native", "frozen"), default="auto")
     parser.add_argument("--allow-overwrite", action="store_true")
+    parser.add_argument("--event-id", type=int, help="Fixture event ID for external acquisition")
     parser.add_argument("--configure-fixture", action="store_true", help="Explicit S22 comparison with verified fixture edits")
     parser.add_argument("--configure-slots", action="store_true", help="Explicit temporary CH2 slot comparison")
     parser.add_argument("--job-id")
@@ -54,10 +55,14 @@ def main(argv=None):
     operation = args.operation
     try:
         client = Client(args.config)
-        if operation in ("snapshot", "triggered", "s22-probe"):
+        if operation in ("snapshot", "triggered", "external", "s22-probe"):
             payload = {"kind": operation}
-            if operation == "triggered":
+            if operation in ("triggered", "external"):
                 payload.update(path=args.path, allow_overwrite=args.allow_overwrite)
+                if operation == "external":
+                    if args.event_id is None or not 1 <= args.event_id <= 65535:
+                        parser.error("external requires --event-id from 1 to 65535")
+                    payload["event_id"] = args.event_id
             elif operation == "s22-probe":
                 payload["configure_fixture"] = args.configure_fixture
                 if args.configure_slots:
