@@ -185,6 +185,12 @@ class Session:
         if len(ack) != 1:
             raise RuntimeError("Unexpected S93 acknowledgment shape")
 
+    def measurement(self, item, channel):
+        body = self.exchange(f"measure_{channel + 1}_{item}", frame(0x22, bytes([item, channel, 0])), 0xA2)
+        if len(body) > 32:
+            raise RuntimeError("Measurement response exceeds display-text size")
+        return body.rstrip(b"\x00").decode("ascii")
+
     def capture(self, name, snapshot):
         raw = self.exchange(name, frame(2, b"\x01\x04"), 0x82, duration=3., limit=32768, waveform=True)
         result = decode_native_waveform([raw], selector=4)
@@ -228,6 +234,12 @@ def _plausible(capture):
                     750 <= ch["frequency_hz"] <= 1250 and 3. <= ch["vpp_v"] <= 7.
                     for ch in (a, b)))
 
+def _periodic_pair(capture):
+    channels = capture["channels"]
+    return (set(channels) == {"CH1", "CH2"} and not capture["availability"]["MATH"]
+            and all(not ch["clipped"] and ch["frequency_hz"] is not None
+                    and 750 <= ch["frequency_hz"] <= 1250 for ch in channels.values()))
+
 
 def workflow(session, mode, outcome):
     baseline = session.settings("initial")
@@ -241,7 +253,7 @@ def workflow(session, mode, outcome):
     changed = False
     try:
         changed = True
-        configured = session.set_fields("fixture_scale", baseline, {1: 7, 5: 1, 11: 10, 15: 0})
+        configured = session.set_fields("fixture_scale", baseline, {1: 7, 5: 1, 11: 9, 15: 0})
         if not _running(configured):
             session.key("start_running", RUN_STOP)
         running = session.settings("running")
@@ -250,8 +262,13 @@ def workflow(session, mode, outcome):
         outcome["modified"] = describe(running)
         outcome["running"] = session.capture("running_waveform", running)
         outcome["running_plausible"] = _plausible(outcome["running"])
-        if not outcome["running_plausible"]:
-            raise RuntimeError("Running waveform failed nominal fixture checks")
+        outcome["running_periodic"] = _periodic_pair(outcome["running"])
+        outcome["scope_measurements"] = {
+            ch: {str(item): session.measurement(item, index) for item in (1, 4)}
+            for index, ch in enumerate(("CH1", "CH2"))
+        }
+        if not outcome["running_periodic"]:
+            raise RuntimeError("Running waveform failed dual-channel periodicity and clipping checks")
         if mode == "full":
             session.key("arm_single", SINGLE)
             for attempt in range(1, 5):
@@ -261,8 +278,10 @@ def workflow(session, mode, outcome):
                     outcome["single"] = session.capture("single_waveform", stopped)
                     outcome["single_plausible"] = _plausible(outcome["single"])
                     break
-            if not outcome.get("single_plausible"):
-                raise RuntimeError("SINGLE stopped waveform unavailable or failed fixture checks")
+            if not outcome.get("single") or not _periodic_pair(outcome["single"]):
+                raise RuntimeError("SINGLE stopped waveform unavailable or failed periodicity checks")
+        if not outcome["running_plausible"] or (mode == "full" and not outcome["single_plausible"]):
+            raise RuntimeError("Waveform captured but nominal voltage limits were not met")
     finally:
         if changed and session.settled:
             current = session.settings("before_restore")
