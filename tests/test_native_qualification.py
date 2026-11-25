@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from hantek_dso5k._framing import frame, STATUS
+from hantek_dso5k._host import Blocked, finalization_guard, require_no_finalization
+from hantek_dso5k import _native_finalization as finalization
 from hantek_dso5k._native_qualification import REQUEST, _run
 
 
@@ -63,11 +65,12 @@ class FakeTransport:
 
 class NativeQualificationTests(unittest.TestCase):
     def session(self, link, *, fixture=FIXTURE, continued=True, claim_error=False, lease_error=False,
-                prior_marker=False):
+                prior_marker=False, mutate_marker=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         self.marker = root / "marker.json"
+        self.guard = finalization_guard(self.marker)
         self.evidence = root / "evidence"
         if prior_marker:
             self.marker.write_bytes(b"previous")
@@ -76,10 +79,12 @@ class NativeQualificationTests(unittest.TestCase):
         @contextmanager
         def hold():
             self.actions.append("lease")
+            self.held = True
             try:
                 yield
             finally:
                 self.actions.append("release lease")
+                self.held = False
                 if lease_error:
                     raise OSError("lease release failed")
 
@@ -97,6 +102,8 @@ class NativeQualificationTests(unittest.TestCase):
         def observe_panel():
             self.assertEqual(self.actions[-1], "release interface")
             self.actions.append("observe panel")
+            if mutate_marker:
+                mutate_marker(self.marker)
             return continued
 
         return _run(self.evidence, json.dumps(fixture).encode(), source="synthetic", authorization="test",
@@ -113,7 +120,10 @@ class NativeQualificationTests(unittest.TestCase):
         result = self.session(link)
         self.assertEqual(result["status"], "PASS", result["errors"])
         self.assertEqual(result["marker"], "CLEARED")
+        self.assertEqual(result["finalization"], "COMPLETE")
+        self.assertEqual(result["acquisition_outcome"], "PASS")
         self.assertFalse(self.marker.exists())
+        self.assertFalse(self.guard.exists())
         self.assertTrue(all(result["cleanup"].values()))
         self.assertEqual(result["instrument_continuation"], "CONFIRMED")
         self.assertEqual(result["channel_attribution"], "slot_order_and_distinct_voltage")
@@ -242,7 +252,7 @@ class NativeQualificationTests(unittest.TestCase):
                 link = FakeTransport()
                 result = self.session(link, **{flag: True})
                 self.assertEqual(result["status"], "FAIL")
-                self.assertTrue(self.marker.exists())
+                self.assertTrue(self.marker.exists() if flag == "claim_error" else self.guard.exists())
                 self.assertFalse(all(result["cleanup"].values()))
                 self.check_attempts(result, link, 1)
 
@@ -260,7 +270,7 @@ class NativeQualificationTests(unittest.TestCase):
 
     def test_failed_marker_removal_leaves_no_stale_pass_manifest(self):
         link = FakeTransport()
-        with patch.object(Path, "unlink", side_effect=OSError("marker removal blocked")):
+        with patch.object(finalization, "_retire_marker", side_effect=OSError("marker removal blocked")):
             result = self.session(link)
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(result["marker"], "RETAINED")
@@ -269,3 +279,167 @@ class NativeQualificationTests(unittest.TestCase):
         pending = json.loads((self.evidence / "native_manifest.pending.json").read_bytes())
         self.assertEqual(pending["status"], "FINALIZING")
         self.check_attempts(result, link, 1)
+
+    def test_pending_record_precedes_retirement_under_lease(self):
+        original = finalization._retire_marker
+
+        def retire(marker, identity):
+            self.assertTrue(self.held)
+            self.assertTrue(self.guard.exists())
+            pending = json.loads((self.evidence / "native_manifest.pending.json").read_bytes())
+            self.assertEqual(pending["session_id"], json.loads(marker.read_bytes())["session_id"])
+            self.assertFalse(pending["cleanup"]["lease_released"])
+            original(marker, identity)
+
+        with patch.object(finalization, "_retire_marker", side_effect=retire):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "PASS", result["errors"])
+
+    def test_modified_replaced_and_missing_markers_all_block(self):
+        def replace(path):
+            other = path.with_name("other")
+            other.write_bytes(path.read_bytes())
+            other.replace(path)
+
+        for update in (lambda path: path.write_bytes(b"changed"), replace, Path.unlink):
+            with self.subTest(update=update):
+                result = self.session(FakeTransport(), mutate_marker=update)
+                self.assertEqual(result["status"], "FAIL")
+                self.assertEqual(result["marker"], "IDENTITY_UNCONFIRMED")
+                self.assertTrue(self.guard.exists())
+                if update is not Path.unlink:
+                    self.assertTrue(self.marker.exists())
+                    if update is not replace:
+                        self.assertEqual(self.marker.read_bytes(), b"changed")
+
+    def test_pending_manifest_failure_does_not_retire_marker(self):
+        create = finalization.create_record
+
+        def fail_pending(path, record):
+            self.assertTrue(self.held)
+            if path.name == "native_manifest.pending.json":
+                raise OSError("pending storage failed")
+            return create(path, record)
+
+        with patch.object(finalization, "create_record", side_effect=fail_pending):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["acquisition_outcome"], "PASS")
+        self.assertTrue(self.marker.exists())
+        self.assertTrue(self.guard.exists())
+
+    def test_final_manifest_failure_keeps_guard_and_records_failure(self):
+        with patch.object(finalization, "_rename_guard", side_effect=OSError("publication failed")):
+            result = self.session(FakeTransport())
+        self.assertTrue(result["cleanup"]["lease_released"])
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["finalization"], "FAILED")
+        self.assertEqual(result["errors"][-1]["stage"], "publish_final_manifest")
+        self.assertTrue(self.guard.exists())
+        final = json.loads((self.evidence / "native_manifest.json").read_bytes())
+        self.assertEqual(final["status"], "FAIL")
+
+    def test_release_error_never_commits_success(self):
+        result = self.session(FakeTransport(), lease_error=True)
+        self.assertFalse(result["cleanup"]["lease_released"])
+        self.assertEqual(result["errors"][0]["stage"], "lease_cleanup")
+        self.assertEqual(result["finalization"], "FAILED")
+        self.assertEqual(result["status"], "FAIL")
+        self.assertTrue(self.guard.exists())
+
+    def test_replaced_guard_is_never_published_or_cleared(self):
+        rename = finalization._rename_guard
+
+        def replace_guard(guard, identity, data, target):
+            other = guard.with_name("unrelated")
+            other.write_bytes(b"new owner")
+            other.replace(guard)
+            rename(guard, identity, data, target)
+
+        with patch.object(finalization, "_rename_guard", side_effect=replace_guard):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(self.guard.read_bytes(), b"new owner")
+        self.assertIn("finalization", self.competing_session("later"))
+
+    def test_final_manifest_collision_is_not_replaced(self):
+        rename = finalization._rename_guard
+
+        def collide(guard, identity, data, target):
+            target.write_bytes(b"unexpected destination")
+            rename(guard, identity, data, target)
+
+        with patch.object(finalization, "_rename_guard", side_effect=collide):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual((self.evidence / "native_manifest.json").read_bytes(), b"unexpected destination")
+        self.assertTrue(self.guard.exists())
+
+    def competing_session(self, name):
+        @contextmanager
+        def hold():
+            if self.held:
+                raise Blocked("Simulated lease already held")
+            yield
+
+        def unexpected():
+            self.fail("Unresolved finalization reached host ownership screening")
+
+        link = FakeTransport()
+        result = _run(self.evidence.with_name(name), json.dumps(FIXTURE).encode(), source="synthetic",
+                      authorization="test", identity="synthetic", hold=hold, claim=unexpected,
+                      screen=unexpected, clock=link.clock, marker=self.marker, continued=unexpected)
+        self.assertEqual(result["status"], "BLOCKED")
+        self.check_attempts(result, link, 0)
+        return result["errors"][0]["detail"]
+
+    def test_cooperative_admission_blocked_before_and_after_release(self):
+        retire = finalization._retire_marker
+        rename = finalization._rename_guard
+
+        def retire_and_compete(marker, identity):
+            self.assertIn("already held", self.competing_session("during_lease"))
+            retire(marker, identity)
+
+        def compete_and_publish(guard, identity, data, target):
+            self.assertFalse(self.held)
+            self.assertFalse(self.marker.exists())
+            with self.assertRaisesRegex(Blocked, "finalization"):
+                require_no_finalization(self.marker)
+            self.assertIn("finalization", self.competing_session("after_release"))
+            return rename(guard, identity, data, target)
+
+        with (patch.object(finalization, "_retire_marker", side_effect=retire_and_compete),
+              patch.object(finalization, "_rename_guard", side_effect=compete_and_publish)):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "PASS", result["errors"])
+        require_no_finalization(self.marker)
+
+    def test_next_session_requires_reconciliation_after_failure(self):
+        self.session(FakeTransport(), lease_error=True)
+        self.assertFalse(self.marker.exists())
+        self.assertIn("finalization", self.competing_session("later"))
+
+    def test_finalization_cancellation_before_retire_and_before_and_after_commit(self):
+        with patch.object(finalization, "_retire_marker", side_effect=KeyboardInterrupt):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "FAIL")
+        self.assertTrue(self.marker.exists())
+        self.assertTrue(self.guard.exists())
+
+        with patch.object(finalization, "_rename_guard", side_effect=KeyboardInterrupt):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "FAIL")
+        self.assertTrue(self.guard.exists())
+
+        rename = finalization._rename_guard
+
+        def publish_then_interrupt(guard, identity, data, target):
+            rename(guard, identity, data, target)
+            raise KeyboardInterrupt
+
+        with patch.object(finalization, "_rename_guard", side_effect=publish_then_interrupt):
+            result = self.session(FakeTransport())
+        self.assertEqual(result["status"], "PASS", result["errors"])
+        self.assertEqual(result["finalization"], "COMPLETE")
+        self.assertFalse(self.guard.exists())

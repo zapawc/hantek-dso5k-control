@@ -166,6 +166,22 @@ def host_snapshot():
     return snapshot
 
 
+def interruption_path():
+    return Path(os.environ["LOCALAPPDATA"]) / "HantekDSO5kControl/rear-usb-unsettled.json"
+
+
+def finalization_guard(marker):
+    return marker.with_name("rear-usb-native-finalizing.json")
+
+
+def require_no_finalization(marker):
+    try:
+        finalization_guard(marker).lstat()
+    except FileNotFoundError:
+        return
+    raise Blocked("Prior native session finalization requires external review")
+
+
 @contextmanager
 def lease():
     if sys.platform != "win32":
@@ -188,6 +204,7 @@ def lease():
             raise Blocked("Prior owner abandoned the lease. Command history is uncertain.")
         if status != 0:
             raise Blocked("Cooperative USB lease unavailable")
+        require_no_finalization(interruption_path())
         yield
     finally:
         released = not held or kernel.ReleaseMutex(handle)

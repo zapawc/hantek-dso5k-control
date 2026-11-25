@@ -11,7 +11,7 @@ import sys
 from time import perf_counter
 
 from . import __version__
-from ._host import assess_host, Blocked, host_snapshot, lease
+from ._host import assess_host, Blocked, host_snapshot, interruption_path as state_path, lease
 from ._qualification import ClaimedLinkIO, run
 from ._screens import review_session, write_json_new
 from ._settings import settings
@@ -23,10 +23,6 @@ CAPTURE_SCHEMA_VERSION = "2.0"
 
 def utc():
     return datetime.now(timezone.utc).isoformat()
-
-
-def state_path():
-    return Path(os.environ["LOCALAPPDATA"]) / "HantekDSO5kControl/rear-usb-unsettled.json"
 
 
 def installed_commit():

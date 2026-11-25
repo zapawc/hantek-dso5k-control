@@ -9,9 +9,11 @@ from pathlib import Path
 import shutil
 import sys
 from time import perf_counter
+from uuid import uuid4
 
 from ._graphics import READ_BYTES
-from ._host import Blocked, assess_host, host_snapshot, lease
+from ._host import Blocked, assess_host, finalization_guard, host_snapshot, lease, require_no_finalization
+from ._native_finalization import create_record, prepare, publish
 from ._pair_windows import _claim_pair, _source_commit
 from ._receive import PACKET_BYTES, ReceiveError, ReceiveStream
 from ._retrieve import file_record, record_cleanup
@@ -196,7 +198,7 @@ def _run(evidence, fixture_raw, *, source, authorization, identity, hold, claim,
          marker, continued):
     """One session. The production wrapper is the only caller providing a WinUSB backend."""
     result = {
-        "schema_version": "0.1-native-supervised", "status": "BLOCKED", "source_commit": source,
+        "schema_version": "0.2-native-supervised", "status": "BLOCKED", "source_commit": source,
         "authorization": authorization, "identity_provenance": identity, "start_utc": utc(),
         "fixture_sha256": sha256(fixture_raw).hexdigest(), "device_generation_id": None,
         "acquisition_coherence": "UNPROVEN", "request_attempts": 0, "retries": 0,
@@ -206,15 +208,19 @@ def _run(evidence, fixture_raw, *, source, authorization, identity, hold, claim,
         "measurement_pass": False, "instrument_continuation": "NOT_CHECKED",
         "cleanup": dict(lease_acquired=False, lease_released=False, interface_claimed=False,
                         interface_released=False),
-        "marker": "NOT_CHECKED", "errors": [],
+        "session_id": uuid4().hex, "marker": "NOT_CHECKED", "admission_guard": "NOT_CHECKED",
+        "acquisition_outcome": "NOT_COMPLETED", "finalization": "NOT_STARTED", "errors": [],
     }
     evidence, marker = Path(evidence).resolve(), Path(marker).absolute()
+    guard = finalization_guard(marker)
+    guard_identity = None
     created = False
     stage = "fixture"
     try:
         config = _fixture(fixture_raw)
         stage = "evidence"
         if (evidence.drive.startswith("\\\\") or evidence == marker.resolve() or evidence in marker.resolve().parents
+                or evidence == guard.resolve() or evidence in guard.resolve().parents
                 or not evidence.parent.is_dir() or shutil.disk_usage(evidence.parent).free < 4 * 1024 * 1024):
             raise Blocked("Use a fresh evidence directory with a local parent and room for evidence")
         evidence.mkdir()
@@ -229,6 +235,8 @@ def _run(evidence, fixture_raw, *, source, authorization, identity, hold, claim,
             stage = "ownership"
             with record_cleanup(hold(), result["cleanup"], "lease_released"):
                 result["cleanup"]["lease_acquired"] = True
+                require_no_finalization(marker)
+                result["admission_guard"] = "ABSENT"
                 if os.path.lexists(marker):
                     result["marker"] = "EXISTING"
                     raise Blocked("Prior interruption marker requires external review")
@@ -238,12 +246,17 @@ def _run(evidence, fixture_raw, *, source, authorization, identity, hold, claim,
                     raise Blocked(result["host"]["blocked"])
                 stage = "marking"
                 marker.parent.mkdir(parents=True, exist_ok=True)
-                with marker.open("x", encoding="utf-8") as handle:
-                    result["marker"] = "RETAINED"
-                    handle.write(json.dumps({"run_id": evidence.name, "source_commit": source,
-                                             "operation": "ACQ-10H", "utc": utc()}))
-                    handle.flush()
-                    os.fsync(handle.fileno())
+                if marker.parent.stat().st_dev != evidence.stat().st_dev:
+                    raise Blocked("Evidence and marker must support same-volume finalization")
+                marker_identity = create_record(marker, {
+                    "run_id": evidence.name, "session_id": result["session_id"],
+                    "source_commit": source, "operation": "ACQ-10H", "utc": utc(),
+                })
+                result["marker"] = "RETAINED"
+                result["marker_identity"] = {
+                    "volume": marker_identity[0][0], "file_id": str(marker_identity[0][1]),
+                    "sha256": sha256(marker_identity[1]).hexdigest(),
+                }
                 stage = "claim"
                 with record_cleanup(claim(), result["cleanup"], "interface_released") as link:
                     result["cleanup"]["interface_claimed"] = True
@@ -270,11 +283,13 @@ def _run(evidence, fixture_raw, *, source, authorization, identity, hold, claim,
                 stage = "continuation"
                 result["instrument_continuation"] = "CONFIRMED" if continued() is True else "UNCONFIRMED"
                 log("operator_continuation", outcome=result["instrument_continuation"])
+                if (result["transport"] == "PASS" and result["primary_complete"] and result["measurement_pass"]
+                        and result["instrument_continuation"] == "CONFIRMED"):
+                    result["acquisition_outcome"] = "PASS_WITH_STATUS" if result["response"]["statuses"] else "PASS"
+                    stage = "prepare_finalization"
+                    guard_identity = prepare(evidence, marker, marker_identity, guard, result)
                 stage = "lease_cleanup"
-        if (result["transport"] == "PASS" and result["primary_complete"] and result["measurement_pass"]
-                and result["instrument_continuation"] == "CONFIRMED"):
-            result["status"] = "PASS_WITH_STATUS" if result["response"]["statuses"] else "PASS"
-        else:
+        if guard_identity is None:
             result["status"] = "FAIL"
             if not result["primary_complete"]:
                 result["errors"].append({"stage": "validation", "detail": "native primary did not match the fixture profile"})
@@ -284,6 +299,8 @@ def _run(evidence, fixture_raw, *, source, authorization, identity, hold, claim,
                 result["errors"].append({"stage": "continuation", "detail": "operator did not confirm normal continuation"})
     except (Exception, KeyboardInterrupt) as exc:
         result["errors"].append({"stage": stage, "type": type(exc).__name__, "detail": str(exc)})
+        if stage == "marking" and os.path.lexists(marker):
+            result["marker"] = "CREATION_UNCONFIRMED"
         if stage in ("write", "response"):
             result["transport"] = "FAIL"
         cleanup = result["cleanup"]
@@ -293,23 +310,27 @@ def _run(evidence, fixture_raw, *, source, authorization, identity, hold, claim,
         )
         if result["request_attempts"] or incomplete_cleanup:
             result["status"] = "FAIL"
+        if result["finalization"] == "PENDING" or stage == "prepare_finalization":
+            result["finalization"] = "FAILED"
+            if os.path.lexists(guard):
+                result["admission_guard"] = "RETAINED"
     result["end_utc"] = utc()
     if created:
+        if guard_identity is not None and result["cleanup"]["lease_released"] and not result["errors"]:
+            try:
+                publish(evidence, marker, guard, guard_identity, result)
+                return result
+            except (Exception, KeyboardInterrupt) as exc:
+                if result["finalization"] == "COMPLETE":
+                    return result
+                result["status"] = "FAIL"
+                result["finalization"] = "FAILED"
+                result["errors"].append({"stage": "publish_final_manifest", "type": type(exc).__name__,
+                                         "detail": str(exc)})
         try:
-            result["artifacts"] = {path.name: file_record(path) for path in evidence.iterdir() if path.is_file()}
-            if result["status"] in ("PASS", "PASS_WITH_STATUS"):
-                # A durable non-final snapshot is available if marker cleanup fails.
-                pending = evidence / "native_manifest.pending.json"
-                write_json_new(pending, dict(result, status="FINALIZING"))
-                with pending.open("r+b") as handle:
-                    os.fsync(handle.fileno())
-                marker.unlink()
-                result["marker"] = "CLEARED"
-        except (Exception, KeyboardInterrupt) as exc:
-            result["status"] = "FAIL"
-            result["errors"].append({"stage": "finalize", "type": type(exc).__name__, "detail": str(exc)})
-        try:
-            write_json_new(evidence / "native_manifest.json", result)
+            if "artifacts" not in result:
+                result["artifacts"] = {path.name: file_record(path) for path in evidence.iterdir() if path.is_file()}
+            create_record(evidence / "native_manifest.json", result)
         except (Exception, KeyboardInterrupt) as exc:
             result["status"] = "FAIL"
             result["errors"].append({"stage": "manifest", "type": type(exc).__name__, "detail": str(exc)})
