@@ -22,6 +22,11 @@ class PulseCodecTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "spacing"):
             decode_pulses(pulses)
 
+    def test_small_repeatable_timer_overhead_does_not_accumulate_as_a_missing_slot(self):
+        pulses = expected_pulses(1126, 1)
+        measured = [(rise + 7 * slot, fall + 7 * slot) for slot, (rise, fall) in enumerate(pulses)]
+        self.assertEqual(decode_pulses(measured, tolerance_us=40), (1, 1126))
+
     def test_rejects_ambiguous_bit_width(self):
         pulses = expected_pulses(1, 2)
         rise, _ = pulses[-1]

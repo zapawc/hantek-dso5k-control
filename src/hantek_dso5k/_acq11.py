@@ -396,7 +396,9 @@ class Session:
                     output.write(content)
                 metrics = read_frozen_csv(content)
                 metrics.update(filename=name, bytes=count, sha256=sha256(content).hexdigest())
-                if metrics["timebase_header"] != f"{round(TIMEBASE[snapshot[160]] * 1e12)}(ps)":
+                expected_ps = round(TIMEBASE[snapshot[160]] * 1e12)
+                wrapped_ps = (expected_ps + 2**31) % 2**32 - 2**31
+                if metrics["timebase_header"] not in (f"{expected_ps}(ps)", f"{wrapped_ps}(ps)"):
                     raise RuntimeError("Frozen CSV timebase does not match the stopped settings")
                 channel = expected.get(int(metrics["voltbase_header"].split("(")[0]))
                 create_record(self.evidence / f"frozen_{index}_measurements.json",

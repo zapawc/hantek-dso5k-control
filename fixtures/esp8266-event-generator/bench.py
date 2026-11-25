@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+from statistics import median
 import sys
 from time import monotonic, sleep
 
@@ -104,7 +105,7 @@ def diagnostic(session, outcome, device, expected):
                 restore(session, baseline, outcome, DIAGNOSTIC)
 
 
-def external(session, outcome, device, event_ids, ready_digest):
+def external(session, outcome, device, event_ids, ready_digest, path):
     baseline = session.settings("acq12_initial")
     outcome["initial"] = describe(baseline)
     if _running(baseline) or baseline[171] or baseline[179] or baseline[185] or baseline[188]:
@@ -150,11 +151,13 @@ def external(session, outcome, device, event_ids, ready_digest):
             else:
                 row["outcome"] = "no_trigger_timeout"
                 break
-            native = session.capture(f"event_{event_id}", frozen)
-            row["native"] = native
-            row["decoded"] = decoded = inspect_capture(native, event_id)
+            decoded = {}
+            if path != "frozen":
+                native = session.capture(f"event_{event_id}", frozen)
+                row["native"] = native
+                row["decoded"] = decoded = inspect_capture(native, event_id)
             accepted = set(decoded) == {"CH1", "CH2"} and all(ch["accepted"] for ch in decoded.values())
-            if not accepted and frozen[206:208] == b"\x30\x01":
+            if not accepted and path != "native" and frozen[206:208] == b"\x30\x01":
                 row["frozen_csv"] = exported = {}
                 session.frozen(frozen, preserved=exported)
                 csv_capture = {"availability": {channel: True for channel in exported},
@@ -168,6 +171,18 @@ def external(session, outcome, device, event_ids, ready_digest):
             row["outcome"] = "common_event" if accepted else "unproven_waveform"
             if not accepted:
                 break
+            first, second = [
+                next(packet["pulses_us"] for packet in decoded[channel]["decoded_candidates"]
+                     if packet["event_id"] == event_id and packet["channel"] == int(channel[-1]))
+                for channel in ("CH1", "CH2")
+            ]
+            delays = [b[0] - a[0] for a, b in zip(first, second)]
+            row["time_relationship"] = {
+                "rising_ch2_minus_ch1_us": delays,
+                "median_us": median(delays),
+                "sample_resolution_bound_us": sum(ch["interval_s"] for ch in decoded.values()) * 1e6,
+                "independent_reference": False,
+            }
     finally:
         try:
             outcome["terminal_fixture"] = confirm_idle(device)
@@ -182,6 +197,7 @@ def main():
     parser.add_argument("--mode", choices=["diagnostic", "external"], default="diagnostic")
     parser.add_argument("--event", action="append", default=[], type=int)
     parser.add_argument("--ready-digest")
+    parser.add_argument("--path", choices=["auto", "native", "frozen"], default="auto")
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--overwrite-stopped", action="store_true", required=True)
     args = parser.parse_args()
@@ -198,7 +214,7 @@ def main():
             if mode == "diagnostic":
                 diagnostic(session, outcome, device, args.event[0])
             else:
-                external(session, outcome, device, args.event, args.ready_digest)
+                external(session, outcome, device, args.event, args.ready_digest, args.path)
 
         result = run(
             args.evidence, source, args.mode, hold=lease, claim=_claim_pair,

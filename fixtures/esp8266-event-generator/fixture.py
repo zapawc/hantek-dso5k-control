@@ -31,11 +31,10 @@ def decode_pulses(pulses: Sequence[tuple[float, float]], *, tolerance_us: float 
         raise ValueError("tolerance must be below 100 µs")
     if len(pulses) != EVENT_BITS + 1:
         raise ValueError("incorrect pulse count")
-    origin = pulses[0][0]
     channel = 0
     event_id = 0
     for slot, (rise, fall) in enumerate(pulses):
-        if not abs(rise - origin - slot * SLOT_US) <= tolerance_us:
+        if slot and not abs(rise - pulses[slot - 1][0] - SLOT_US) <= tolerance_us:
             raise ValueError(f"incorrect spacing at slot {slot}")
         width = fall - rise
         if slot == 0:
