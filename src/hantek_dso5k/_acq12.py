@@ -25,7 +25,8 @@ CSV_FILE_LIST = "4a1036b27b37dd88037401a3116ad63bb27fa4e42a60fb9bd12080514f0f6f9
 
 def set_timebase(session, current, target):
     """Use the SEC/DIV keys because S11 only updates the timebase readback."""
-    if current[188] != 0 or current[162] != 0 or current[160] not in range(15, 21) or target not in range(15, 21):
+    if (current[188] != 0 or current[162] != 0 or current[160] != current[161]
+            or current[160] not in range(15, 21) or target not in range(15, 21)):
         raise ValueError("ACQ-12 timebase keys require ordinary retained 4K mode and a reviewed timebase")
     while current[160] != target:
         direction = 1 if current[160] < target else -1
@@ -33,7 +34,7 @@ def set_timebase(session, current, target):
         key = 41 if direction == 1 else 40
         ack = session.exchange("acq12_timebase_key", frame(0x13, bytes((key, 1))), 0x93, duration=1.4)
         observed = session.settings("acq12_timebase_readback")
-        if len(ack) != 1 or observed[160] != expected:
+        if len(ack) != 1 or observed[160] != expected or observed[161] != expected:
             raise RuntimeError("SEC/DIV key did not advance the reviewed timebase by one step")
         current = observed
     return current
@@ -44,7 +45,7 @@ def restore_panel(session, original, outcome):
     current = session.settings("acq12_before_original_restore")
     fields = compare_settings(original, current)["configuration_or_unclassified_changes"]
     if _running(original) or _running(current) or any(
-            change["field"] not in ("field_160", "field_207") for change in fields):
+            change["field"] not in ("field_160", "field_161", "field_207") for change in fields):
         raise RuntimeError("Original scope restoration encountered an unreviewed difference")
     current = set_timebase(session, current, original[160])
     if current[207] != original[207]:

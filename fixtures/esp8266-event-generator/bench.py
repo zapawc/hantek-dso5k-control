@@ -255,6 +255,9 @@ def main():
                     timebase = 20
                 external(session, outcome, device, args.event, args.ready_digest, args.path,
                          profile=profile, timebase=timebase)
+                if args.event and (len(outcome["trials"]) != len(args.event)
+                                   or any(trial["outcome"] != "common_event" for trial in outcome["trials"])):
+                    raise RuntimeError("The requested series did not preserve a verified event on both channels")
 
         result = run(
             args.evidence, source, args.mode, hold=lease, claim=_claim_pair,
