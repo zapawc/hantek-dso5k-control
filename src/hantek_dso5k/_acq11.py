@@ -13,8 +13,8 @@ from ._framing import STATUS, frame, read_frames
 from ._host import assess_host, finalization_guard, host_snapshot, lease, require_no_finalization
 from ._native_finalization import create_record, prepare, publish
 from ._pair_windows import _claim_pair, _source_commit
-from ._replies import observe
 from ._retrieve import file_record, record_cleanup
+from ._s92_guard import observe_qualification_guard, qualification_guard_result
 from ._session import state_path, utc
 from ._settings import compare_settings
 from .native_waveform import decode_native_waveform
@@ -108,10 +108,11 @@ class Session:
         self.journal.flush()
 
     def startup(self):
+        self.settled = False
+        report = qualification_guard_result()
         with (self.evidence / "startup_rx.bin").open("xb") as stream:
-            if not observe(self.link, self.clock, self.clock(), 12., stream, self.log, limit=0)["complete"]:
-                self.settled = False
-                raise RuntimeError("Strict receive-only startup blocked")
+            observe_qualification_guard(self.link, self.clock, stream, self.log, report)
+        self.settled = report["complete"]
 
     def exchange(self, name, request, opcode, *, duration=1.1, limit=1024, waveform=False):
         if not self.settled:
