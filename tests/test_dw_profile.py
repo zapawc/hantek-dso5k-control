@@ -64,6 +64,27 @@ class PlatformTests(TestCase):
         self.assertFalse(caps["extensions"][dw.EXT]["external_arm_ready_qualified"])
         self.assertEqual(self.dw.json("settings")["values"], self.legacy.json("settings")["settings"])
 
+    def test_external_job_is_scoped_to_the_opt_in_worker(self):
+        request = {"kind": "hantek.external", "arguments": {"event_id": 42, "allow_overwrite": True},
+                   "timeout_s": 120}
+        self.assert_problem(lambda: self.dw.json("jobs", request), 409, "operation_conflict")
+        self.worker.external_fixture = Mock()
+        caps = self.dw.json("capabilities")
+        self.assertTrue(caps["extensions"][dw.EXT]["external_arm_ready_qualified"])
+        self.assertIn("hantek.external", [job["kind"] for job in caps["jobs"]])
+        self.assertIn("external", self.legacy.json("capabilities")["operations"])
+        self.assert_problem(lambda: self.dw.json("jobs", {
+            **request, "arguments": {"event_id": True, "allow_overwrite": True},
+        }), 422, "invalid_arguments")
+        self.assert_problem(lambda: self.dw.json("jobs", {
+            **request, "arguments": {"event_id": 42},
+        }), 409, "operation_conflict")
+        admission = self.dw.json("jobs", request)
+        self.assertEqual(admission["state"], "queued")
+        job = self.worker.job(admission["job_id"])
+        self.assertEqual(job["request"]["event_id"], 42)
+        self.assertEqual(job["request"]["path"], "auto")
+
     def test_auth_host_origin_and_fault_cache(self):
         for headers, status, code in [
             ({}, 401, "invalid_credentials"),

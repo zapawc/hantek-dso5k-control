@@ -80,6 +80,7 @@ def restore(session, baseline, outcome, fields):
                                          and _running(baseline) == _running(final)))
     if not outcome["restoration_verified"]:
         raise RuntimeError("ACQ-12 scope restoration did not match its baseline")
+    return final
 
 
 def screen_status(session, name):

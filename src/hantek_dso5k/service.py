@@ -77,7 +77,7 @@ class Service:
     def __init__(self, evidence, *, interval, stale_after, measurements, clock=monotonic,
                  channels=CHANNELS, source="s22", settings_every=None, waveform_every=1.,
                  instrument_id="hantek-dso5102p", rapid_reads=False, physical_probes=None,
-                 detailed=False, configured_slots_only=False, priority=()):
+                 detailed=False, configured_slots_only=False, priority=(), external_fixture=None):
         self.evidence = Path(evidence)
         self.interval, self.stale_after, self.clock = interval, stale_after, clock
         self.channels = channels
@@ -95,6 +95,7 @@ class Service:
         self.instrument_id, self.instance_id = instrument_id, uuid4().hex
         self.rapid_reads, self.physical_probes = rapid_reads, physical_probes
         self.detailed, self.configured_slots_only = detailed, configured_slots_only
+        self.external_fixture = external_fixture
         self.raw_settings = None
         self.next_settings = self.next_wave = 0.
         self.monitor_batch, self.monitor_turn = -1, 0
@@ -156,6 +157,10 @@ class Service:
 
     def submit(self, request, *, budget=None):
         with self.changed:
+            if request["kind"] == "external" and self.external_fixture is None:
+                raise Unsupported("The supervised external fixture is not configured")
+            if request["kind"] == "external" and not request["allow_overwrite"]:
+                raise Unsupported("External SINGLE requires explicit stopped-record overwrite consent")
             if budget is not None and (self.state in ("STARTING", "FAULT") or not self.connected):
                 raise Unavailable("Instrument session is unavailable")
             if self.stopping or self.state != "MONITORING" or self.pending is not None:
@@ -351,6 +356,8 @@ class Service:
                     raise Unsupported("No native waveform records were returned")
             elif request["kind"] == "triggered":
                 triggered(session, baseline, job_id, request, result, self._requires_restore)
+            elif request["kind"] == "external":
+                self.external_fixture(session, baseline, request, result, self._requires_restore)
             elif request["kind"] == "run-state":
                 set_run_state(session, baseline, request, result, self._requires_restore)
             else:
@@ -363,7 +370,7 @@ class Service:
         finally:
             if isinstance(session, Session):
                 session.job_check = None
-            if request["kind"] == "triggered":
+            if request["kind"] in ("triggered", "external"):
                 if result.get("restoration_verified"):
                     result["restoration_outcome"] = "succeeded"
                 elif self.restoration_owed:
@@ -502,6 +509,15 @@ def parse_job(payload):
                 or type(overwrite) is not bool):
             raise ValueError("Expected auto, native or frozen path and optional boolean allow_overwrite")
         return {"kind": kind, "path": path, "allow_overwrite": overwrite}
+    if kind == "external":
+        event_id = payload.get("event_id")
+        path = payload.get("path", "auto")
+        overwrite = payload.get("allow_overwrite", False)
+        if (set(payload) - {"kind", "path", "allow_overwrite", "event_id"}
+                or path not in ("auto", "native", "frozen") or type(overwrite) is not bool
+                or type(event_id) is not int or not 1 <= event_id <= 65535):
+            raise ValueError("Expected an event ID from 1 to 65535, an allowed path and overwrite consent")
+        return {"kind": kind, "event_id": event_id, "path": path, "allow_overwrite": overwrite}
     if kind == "run-state":
         overwrite = payload.get("allow_overwrite", False)
         if (set(payload) - {"kind", "running", "allow_overwrite"} or type(payload.get("running")) is not bool
@@ -639,8 +655,11 @@ class LocalHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/measurements":
             return self._json(200, svc.latest())
         if self.path == "/v1/capabilities":
+            operations = ["snapshot", "triggered", "run-state", "s22-probe", "shutdown"]
+            if svc.external_fixture is not None:
+                operations.append("external")
             return self._json(200, {"schema": STATUS_SCHEMA, "instrument": instrument(),
-                                   "operations": ["snapshot", "triggered", "run-state", "s22-probe", "shutdown"],
+                                   "operations": operations,
                                    "triggered_paths": ["auto", "native", "frozen"], "same_shot": "UNPROVEN",
                                    "active_measurements": [list(item) for item in svc.sensors]})
         parts = self.path.split("/")
@@ -711,7 +730,7 @@ def write_discovery(path, settings):
         os.fsync(stream.fileno())
 
 
-def main(argv=None):
+def main(argv=None, *, external_fixture=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", required=True,
                         help="Explicitly opt into instrument ownership on the retained Workbench scope")
@@ -764,7 +783,7 @@ def main(argv=None):
                   instrument_id=args.instrument_id, rapid_reads=args.timing == "validated-quiet",
                   physical_probes={"CH1": 10, "CH2": 1} if args.physical_probes else None,
                   detailed=args.detailed_monitor_log, configured_slots_only=args.configured_slots_only,
-                  priority=priority)
+                  priority=priority, external_fixture=external_fixture)
     token = secrets.token_urlsafe(32)
     with LocalServer(svc, token, args.port) as server:
         write_discovery(folder / "client.json", {"endpoint": f"http://127.0.0.1:{server.server_port}", "token": token})

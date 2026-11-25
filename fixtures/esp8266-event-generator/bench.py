@@ -9,12 +9,14 @@ from statistics import median
 import sys
 from time import monotonic, sleep
 
-from fixture import command, decode_pulses, open_fixture
+from fixture import command, inspect_capture, open_fixture
 from hantek_dso5k._acq11 import RUN_STOP, SINGLE, _running, describe, run
 from hantek_dso5k._acq12 import DIAGNOSTIC, EXTERNAL, apply_profile, restore, screen_status, set_timebase
 from hantek_dso5k._host import assess_host, host_snapshot, lease
+from hantek_dso5k._native_finalization import create_record
+from hantek_dso5k._retrieve import file_record
 from hantek_dso5k._pair_windows import _claim_pair, _source_commit
-from hantek_dso5k._session import state_path
+from hantek_dso5k._session import state_path, utc
 
 
 def fixture_request(device, request):
@@ -29,43 +31,6 @@ def confirm_idle(device):
     if report["active"] or report["high_mask"]:
         raise RuntimeError("Fixture does not report idle")
     return report
-
-
-def inspect_capture(capture, expected):
-    channels = {}
-    for channel in ("CH1", "CH2"):
-        if not capture["availability"].get(channel):
-            continue
-        report = capture["channels"][channel]
-        # Reuse the retained display conversion. Edges are relative to record start.
-        interval = report["interval_s"]
-        rises = report["rising_edges_s"]
-        falls = iter(report["falling_edges_s"])
-        fall = next(falls, None)
-        pulses = []
-        for rise in rises:
-            while fall is not None and fall <= rise:
-                fall = next(falls, None)
-            if fall is not None:
-                pulses.append((rise * 1e6, fall * 1e6))
-        candidates = []
-        tolerance = max(25, 2 * interval * 1e6)
-        if tolerance < 100:
-            for start in range(len(pulses) - 16):
-                packet = pulses[start:start + 17]
-                try:
-                    number, decoded = decode_pulses(packet, tolerance_us=tolerance)
-                except ValueError:
-                    continue
-                candidates.append({"channel": number, "event_id": decoded, "pulses_us": packet})
-        channels[channel] = {
-            **report,
-            "decoded_candidates": candidates,
-            "decode_tolerance_us": tolerance,
-            "accepted": any(row["event_id"] == expected and row["channel"] == int(channel[-1])
-                            for row in candidates) and not report["clipped"],
-        }
-    return channels
 
 
 def diagnostic(session, outcome, device, expected):
@@ -105,22 +70,29 @@ def diagnostic(session, outcome, device, expected):
                 restore(session, baseline, outcome, DIAGNOSTIC)
 
 
-def external(session, outcome, device, event_ids, ready_digest, path):
-    baseline = session.settings("acq12_initial")
+def external(session, outcome, device, event_ids, ready_digest, path, *, baseline=None,
+             restoration_required=None, timebase=19, profile=EXTERNAL):
+    if baseline is None:
+        baseline = session.settings("acq12_initial")
     outcome["initial"] = describe(baseline)
     if _running(baseline) or baseline[171] or baseline[179] or baseline[185] or baseline[188]:
         raise RuntimeError("Start in stopped ordinary YT sample mode with Math disabled")
     outcome["fixture"] = fixture_request(device, "INFO")
+    if (outcome["fixture"].get("firmware"), outcome["fixture"].get("version")) != ("acq12-esp8266", "0.2.0"):
+        raise RuntimeError("Unexpected fixture firmware")
     idle = confirm_idle(device)
     if event_ids and (event_ids != sorted(set(event_ids)) or event_ids[0] <= idle["last_accepted_id"]):
         raise RuntimeError("Event IDs must increase past the fixture's last accepted ID")
+    if restoration_required is not None:
+        restoration_required(True)
+    restored = None
     try:
-        configured = apply_profile(session, "acq12_external_settings", baseline, EXTERNAL)
-        configured = set_timebase(session, configured, 19)
+        configured = apply_profile(session, "acq12_external_settings", baseline, profile)
+        configured = set_timebase(session, configured, timebase)
         outcome["configured"] = describe(configured)
         outcome["trials"] = trials = []
         for event_id in event_ids or [None]:
-            row = {"requested_event_id": event_id, "fixture_idle": confirm_idle(device)}
+            row = {"requested_event_id": event_id, "fixture_idle": confirm_idle(device), "started_at": utc()}
             trials.append(row)
             session.key("acq12_single", SINGLE)
             row["arming_requested"] = True
@@ -140,6 +112,9 @@ def external(session, outcome, device, event_ids, ready_digest, path):
             if not row["arm_ready"]:
                 row["outcome"] = "readiness_unavailable"
                 break
+            if session.job_check is not None:
+                session.job_check()
+            row["event_requested_host_utc"] = utc()
             row["event_requested_host_monotonic"] = monotonic()
             row["fixture_ack"] = fixture_request(device, f"EVENT {event_id}")
             for _ in range(4):
@@ -147,6 +122,7 @@ def external(session, outcome, device, event_ids, ready_digest, path):
                 if _running(frozen):
                     continue
                 row["completion_state"] = frozen[20]
+                row["scope_stop_observed_at"] = utc()
                 break
             else:
                 row["outcome"] = "no_trigger_timeout"
@@ -183,12 +159,53 @@ def external(session, outcome, device, event_ids, ready_digest, path):
                 "sample_resolution_bound_us": sum(ch["interval_s"] for ch in decoded.values()) * 1e6,
                 "independent_reference": False,
             }
+            row["waveform_preserved_at"] = utc()
+            row["fixture_end"] = fixture_request(device, "STATUS")
+            if row["fixture_end"]["last_completed_id"] != event_id or row["fixture_end"]["high_mask"]:
+                raise RuntimeError("Fixture did not report completed and idle after capture")
     finally:
         try:
             outcome["terminal_fixture"] = confirm_idle(device)
         finally:
             if session.settled:
-                restore(session, baseline, outcome, EXTERNAL)
+                restored = restore(session, baseline, outcome, profile)
+                if restoration_required is not None:
+                    restoration_required(False)
+    return restored
+
+
+def serve(argv):
+    """Start the existing service with one locally configured qualifier and serial fixture."""
+    from hantek_dso5k import service
+    from hantek_dso5k._service_capture import Unsupported, instrument
+
+    parser = argparse.ArgumentParser(description=serve.__doc__, allow_abbrev=False)
+    parser.add_argument("--fixture-port", required=True)
+    parser.add_argument("--ready-digest", required=True)
+    config, service_args = parser.parse_known_args(argv)
+    if len(config.ready_digest) != 64 or any(c not in "0123456789abcdef" for c in config.ready_digest):
+        parser.error("supply the observed ready status digest as 64 lowercase hex digits")
+
+    def capture(session, baseline, request, result, restoration_required):
+        with open_fixture(config.fixture_port) as device:
+            restored = external(session, result, device, [request["event_id"]], config.ready_digest,
+                                request["path"], baseline=baseline, restoration_required=restoration_required)
+        trial = result["trials"][0]
+        result.update(restored_raw=restored, method=trial.get("retrieval_method"),
+                      common_event=trial["outcome"] == "common_event")
+        result["acquisition_outcome"] = "succeeded" if result["common_event"] else "failed"
+        artifacts = {item.name: file_record(item) for item in session.evidence.iterdir()
+                     if item.suffix in (".csv", ".rx", ".rgb565")}
+        create_record(session.evidence / "external-event.json", {
+            "schema_version": "1", "fixture": result["fixture"], "instrument": instrument(),
+            "acquisition_id": session.evidence.name, "configuration": result["configured"],
+            "trial": trial, "restoration_verified": result.get("restoration_verified"),
+            "artifacts": artifacts, "time_reference": "relative record start and host UTC",
+        })
+        if not result["common_event"]:
+            raise Unsupported(trial["outcome"])
+
+    return service.main(service_args, external_fixture=capture)
 
 
 def main():
@@ -224,7 +241,10 @@ def main():
     print(json.dumps({key: value for key, value in result.items() if key not in
                       ("artifacts", "pattern_capture", "idle_capture", "pattern_decoded", "trials")}, indent=2))
     for trial in result.get("trials", []):
-        print(json.dumps({key: value for key, value in trial.items() if key not in ("native", "decoded")}))
+        print(json.dumps({key: trial[key] for key in (
+            "requested_event_id", "outcome", "scope_states_before_event", "arm_ready",
+            "display_trigger_status_sha256", "retrieval_method", "time_relationship",
+        ) if key in trial}))
     for channel, row in result.get("pattern_decoded", {}).items():
         print(json.dumps({"channel": channel, "decoded": row["accepted"],
                           "candidate_ids": [packet["event_id"] for packet in row["decoded_candidates"]],
@@ -234,4 +254,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(serve(sys.argv[2:]) if sys.argv[1:2] == ["serve"] else main())

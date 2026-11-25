@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from fixture import decode_pulses, expected_pulses
+from fixture import decode_pulses, expected_pulses, inspect_capture
 
 
 class PulseCodecTests(unittest.TestCase):
@@ -42,3 +42,17 @@ class PulseCodecTests(unittest.TestCase):
         pulses[-1] = (rise, rise + 200)
         with self.assertRaisesRegex(ValueError, "reserved"):
             decode_pulses(pulses)
+
+    def test_capture_rejects_stale_event_and_swapped_channels(self):
+        def observed(channel):
+            pulses = expected_pulses(177, channel)
+            return {"interval_s": 2e-5, "clipped": False,
+                    "rising_edges_s": [start * 1e-6 for start, _ in pulses],
+                    "falling_edges_s": [end * 1e-6 for _, end in pulses]}
+
+        capture = {"availability": {"CH1": True, "CH2": True},
+                   "channels": {"CH1": observed(1), "CH2": observed(2)}}
+        self.assertTrue(all(ch["accepted"] for ch in inspect_capture(capture, 177).values()))
+        self.assertFalse(any(ch["accepted"] for ch in inspect_capture(capture, 178).values()))
+        capture["channels"] = {"CH1": observed(2), "CH2": observed(1)}
+        self.assertFalse(any(ch["accepted"] for ch in inspect_capture(capture, 177).values()))

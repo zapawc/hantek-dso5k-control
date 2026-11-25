@@ -4,7 +4,7 @@ from hashlib import sha256
 
 PREFIX = "/dw/v0.1"
 EXT = "com.github.zapawc.hantek"
-LIMITS = {"snapshot": (6, 45), "triggered": (65, 120), "run-state": (6, 30)}
+LIMITS = {"snapshot": (6, 45), "triggered": (65, 120), "run-state": (6, 30), "external": (95, 180)}
 STATES = {"STARTING": "starting", "MONITORING": "ready", "CAPTURING": "busy",
           "STOPPING": "stopping", "STOPPED": "stopping", "FAULT": "fault"}
 ARGUMENTS = {
@@ -13,6 +13,9 @@ ARGUMENTS = {
                   "allow_overwrite": {"type": "boolean", "default": False}},
     "run-state": {"running": {"type": "boolean"},
                   "allow_overwrite": {"type": "boolean", "default": False}},
+    "external": {"event_id": {"type": "integer", "minimum": 1, "maximum": 65535},
+                 "path": {"enum": ["auto", "native", "frozen"], "default": "auto"},
+                 "allow_overwrite": {"type": "boolean", "default": False}},
 }
 
 
@@ -55,16 +58,20 @@ def series(channel, quantity, source, unit):
 
 
 def capabilities(service):
+    external = service.external_fixture is not None
+    required = {"run-state": ["running"], "external": ["event_id"]}
     return {"channels": [{"channel_id": ch.lower(), "label": ch} for ch in ("CH1", "CH2")],
             "series": [series(*item) for item in service.series()],
             "jobs": [{"kind": f"hantek.{name}", "arguments_schema": {
                 "type": "object", "properties": properties, "additionalProperties": False,
-                **({"required": ["running"]} if name == "run-state" else {}),
+                **({"required": required[name]} if name in required else {}),
             }, "cancel_supported": False, "min_timeout_s": LIMITS[name][0],
-                "max_timeout_s": LIMITS[name][1]} for name, properties in ARGUMENTS.items()],
+                "max_timeout_s": LIMITS[name][1]} for name, properties in ARGUMENTS.items()
+                     if name != "external" or external],
             "extensions": {EXT: {"triggered_paths": ["auto", "native", "frozen"],
-                                  "capture_profiles": ["retained-compensation-4k"],
-                                  "same_shot": "unproven", "external_arm_ready_qualified": False}}}
+                                  "capture_profiles": ["retained-compensation-4k"]
+                                  + (["acq12-supervised-external-4k"] if external else []),
+                                  "same_shot": "unproven", "external_arm_ready_qualified": external}}}
 
 
 def settings(service):
@@ -99,12 +106,13 @@ def telemetry(service):
 def artifact_map(job):
     known = {}
     for name, metadata in job.get("result", {}).get("artifacts", {}).items():
-        if not (name == "waveform.json" or name.endswith(".csv")
+        if not (name in ("waveform.json", "external-event.json") or name.endswith(".csv")
                 or (name.startswith("frozen_") and name.endswith("_measurements.json"))):
             continue
         artifact_id = sha256(f"{job['id']}:{name}".encode()).hexdigest()[:32]
         media = "text/csv" if name.endswith(".csv") else "application/json"
-        version = ("1.0" if name == "waveform.json" else "hantek-device-csv-1"
+        version = ("1.0" if name == "waveform.json" else "hantek-external-event-1" if name == "external-event.json"
+                   else "hantek-device-csv-1"
                    if name.endswith(".csv") else "hantek-frozen-summary-1")
         known[artifact_id] = (name, {"artifact_id": artifact_id, "size_bytes": metadata["bytes"],
                                     "sha256": metadata["sha256"], "media_type": media,
@@ -118,7 +126,9 @@ def job_view(job):
         view["result"] = {"acquisition": result.get("acquisition_outcome", "unknown"),
                           "restoration": result.get("restoration_outcome", "not_required"),
                           "artifacts": [entry for _, entry in artifact_map(job).values()],
-                          "extensions": {EXT: {"method": result.get("method"), "same_shot": "unproven"}}}
+                          "extensions": {EXT: {"method": result.get("method"), "same_shot": "unproven",
+                                               **({"common_event": result["common_event"]}
+                                                  if "common_event" in result else {})}}}
     error = job.get("error") or job.get("result", {}).get("error")
     if error:
         code = {"JobTimeout": "job_timeout", "Unsupported": "operation_conflict"}.get(

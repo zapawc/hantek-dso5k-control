@@ -55,6 +55,38 @@ def decode_pulses(pulses: Sequence[tuple[float, float]], *, tolerance_us: float 
     return channel, event_id
 
 
+def inspect_capture(capture: dict, expected: int) -> dict:
+    """Compare decoded physical pulses with the requested event and wire assignments."""
+    channels = {}
+    for channel in ("CH1", "CH2"):
+        if not capture["availability"].get(channel):
+            continue
+        report = capture["channels"][channel]
+        interval = report["interval_s"]
+        edges = sorted([(rise, True) for rise in report["rising_edges_s"]]
+                       + [(fall, False) for fall in report["falling_edges_s"]])
+        pulses = [(a * 1e6, b * 1e6) for (a, a_high), (b, b_high) in zip(edges, edges[1:])
+                  if a_high and not b_high]
+        candidates = []
+        tolerance = max(25, 2 * interval * 1e6)
+        if tolerance < 100:
+            for start in range(len(pulses) - EVENT_BITS):
+                packet = pulses[start:start + EVENT_BITS + 1]
+                try:
+                    number, decoded = decode_pulses(packet, tolerance_us=tolerance)
+                except ValueError:
+                    continue
+                candidates.append({"channel": number, "event_id": decoded, "pulses_us": packet})
+        channels[channel] = {
+            **report,
+            "decoded_candidates": candidates,
+            "decode_tolerance_us": tolerance,
+            "accepted": any(row["event_id"] == expected and row["channel"] == int(channel[-1])
+                            for row in candidates) and not report["clipped"],
+        }
+    return channels
+
+
 @contextmanager
 def open_fixture(port: str):
     """Open the fixture at 115200 baud with reset control lines deasserted."""
