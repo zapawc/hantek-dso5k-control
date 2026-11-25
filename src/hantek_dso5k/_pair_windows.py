@@ -81,7 +81,7 @@ def _claim_pair():
         yield ClaimedBulkIO(claimed)
 
 
-def retrieve_pair(specs, evidence, expected, confirmations):
+def retrieve_pair(specs, evidence, expected, confirmations, *, experimental_s92_guard=False):
     """Explicit interactive entrypoint. External architecture approval is required."""
     command = "files retrieve-pair"
     try:
@@ -94,6 +94,9 @@ def retrieve_pair(specs, evidence, expected, confirmations):
         _source_commit(expected)
         print("Proceed only with run-specific architecture approval and all six confirmations. "
               "Type YES to allow one paired session:", file=sys.stderr, flush=True)
+        if experimental_s92_guard:
+            print("Experimental S92 qualification selected. A clean guard without S92 is inconclusive.",
+                  file=sys.stderr, flush=True)
         if input().strip() != "YES":
             raise PairBlocked("Operator declined paired session")
         commit, marker = _source_commit(expected), state_path()
@@ -102,4 +105,5 @@ def retrieve_pair(specs, evidence, expected, confirmations):
         return _blocked(command, exc)
     return _run_pair(*specs, evidence, confirmations=confirmations,
                      hold=lease, census=host_snapshot, assess=assess_host, claim=_claim_pair,
-                     clock=perf_counter, marker=marker, source_commit=commit)
+                     clock=perf_counter, marker=marker, source_commit=commit,
+                     experimental_s92_guard=experimental_s92_guard)

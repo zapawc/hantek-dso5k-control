@@ -10,6 +10,7 @@ from typing import NamedTuple
 from ._file_replay import CHUNK_BYTES, MAX_RX_BYTES, SHA256_HEX, csv_request, decode_file_reply, publish_file
 from ._receive import ReceiveError, observe
 from ._retrieve import CONFIRMATIONS, file_record, require_absent, window_result, record_cleanup
+from ._s92_guard import observe_qualification_guard, qualification_guard_result
 from ._screens import write_json_new
 from ._session import utc
 
@@ -61,12 +62,14 @@ def _record_reference(spec, count):
 
 
 def simulate_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations,
-                  hold=None, census=None, claim=None, assess=None, clock=None, marker=None):
+                  hold=None, census=None, claim=None, assess=None, clock=None, marker=None,
+                  experimental_s92_guard=False):
     """Run a simulation with caller-supplied dependencies and no live defaults."""
     if any(x is None for x in (hold, census, claim, assess, clock, marker)):
         raise PairBlocked("ACQ-06 has no live backend; offline injected dependencies required")
     return _run_pair(spec_ch1, spec_ch2, evidence_dir, confirmations=confirmations,
-                     hold=hold, census=census, claim=claim, assess=assess, clock=clock, marker=marker)
+                     hold=hold, census=census, claim=claim, assess=assess, clock=clock, marker=marker,
+                     experimental_s92_guard=experimental_s92_guard)
 
 
 def pair_paths(specs, evidence, marker):
@@ -103,7 +106,7 @@ def pair_references(specs):
 
 
 def _run_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations, hold, census, claim,
-              assess, clock, marker, source_commit=None):
+              assess, clock, marker, source_commit=None, experimental_s92_guard=False):
     specs = (spec_ch1, spec_ch2)
     evidence = Path(evidence_dir).absolute()
     marker = Path(marker).absolute()
@@ -129,6 +132,10 @@ def _run_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations, hold, census, 
     if source_commit is not None:
         result.update(schema_version="0.1-supervised", command="files retrieve-pair",
                       source="supervised Windows adapter", source_commit=source_commit)
+    guard = result["inter_request_guard"]
+    if experimental_s92_guard:
+        result["schema_version"] = "0.2-s92-qualification"
+        guard.update(qualification_guard_result())
     journal = None
     created = False
     stage = "evidence_setup"
@@ -179,9 +186,13 @@ def _run_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations, hold, census, 
                         if index:
                             stage = "inter_request_guard"
                             with (evidence / "inter_request_guard_rx.bin").open("xb") as rx:
-                                observe(link, clock, clock(), rx, log, result["inter_request_guard"],
-                                        duration=WINDOW, rx_limit=MAX_RX_BYTES, require_silence=True)
-                            result["inter_request_guard"]["complete"] = True
+                                if experimental_s92_guard:
+                                    if not observe_qualification_guard(link, clock, rx, log, guard):
+                                        break
+                                else:
+                                    observe(link, clock, clock(), rx, log, guard,
+                                            duration=WINDOW, rx_limit=MAX_RX_BYTES, require_silence=True)
+                                    guard["complete"] = True
                         # Fail closed on destinations being introduced during USB activity.
                         stage = key + "_destination"
                         for out in paths:
@@ -220,14 +231,18 @@ def _run_pair(spec_ch1, spec_ch2, evidence_dir, *, confirmations, hold, census, 
             stage = "marker_cleanup"
             marker.unlink()
             result["marker"] = "CLEARED"
-            stage = "publish"
-            for key, path in zip(("CH1", "CH2"), paths):
-                publish_file(path, completed_bytes[key],
-                             result["channels"][key]["reference"]["sha256"])
-                result["channels"][key]["output_published"] = True
-                log("output_published", channel=key)
+            if experimental_s92_guard and guard["outcome"] == "INCONCLUSIVE":
+                outcome = "INCONCLUSIVE", 7
+            else:
+                stage = "publish"
+                for key, path in zip(("CH1", "CH2"), paths):
+                    publish_file(path, completed_bytes[key],
+                                 result["channels"][key]["reference"]["sha256"])
+                    result["channels"][key]["output_published"] = True
+                    log("output_published", channel=key)
+                outcome = "PASS", 0
             stage = "journal_close"
-        result["status"], result["exit_code"] = "PASS", 0
+        result["status"], result["exit_code"] = outcome
     except (Exception, KeyboardInterrupt) as exc:
         if result["cleanup"]["lease_acquired"] and not result["cleanup"]["lease_released"]:
             result["status"], result["exit_code"] = "ERROR", 4

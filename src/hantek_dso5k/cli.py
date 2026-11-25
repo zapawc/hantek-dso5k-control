@@ -64,6 +64,8 @@ def main(argv=None):
         for name in ("ch1-sha256", "ch2-sha256", "source-commit"):
             command.add_argument("--" + name, required=True)
         if action == "retrieve-pair":
+            command.add_argument("--experimental-s92-guard", action="store_true",
+                                 help="targeted S92 qualification; separate hardware approval required")
             for confirmation in CONFIRMATIONS:
                 command.add_argument("--confirm-" + confirmation, action="store_true")
     for name, actions in {"device": ["identify"], "settings": ["read"], "clock": ["read", "compare", "sync"],
@@ -98,7 +100,8 @@ def main(argv=None):
             else:
                 confirmations = [name for name in CONFIRMATIONS
                                  if getattr(args, "confirm_" + name.replace("-", "_"))]
-                output = retrieve_pair(specs, args.evidence_dir, args.source_commit, confirmations)
+                output = retrieve_pair(specs, args.evidence_dir, args.source_commit, confirmations,
+                                       experimental_s92_guard=args.experimental_s92_guard)
             code = output["exit_code"]
         elif args.command == "files":
             confirmations = [name for name in CONFIRMATIONS
