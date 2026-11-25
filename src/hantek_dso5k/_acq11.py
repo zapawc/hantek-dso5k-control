@@ -181,6 +181,7 @@ class Session:
         self.link, self.evidence, self.journal, self.clock = link, evidence, journal, clock
         self.count = 0
         self.settled = True
+        self.last_timing = None
 
     def log(self, event, **fields):
         self.journal.write(json.dumps({"event": event, "utc": utc(), "monotonic": self.clock(),
@@ -201,10 +202,14 @@ class Session:
         stem.with_suffix(".tx").write_bytes(request)
         self.count += 1
         self.settled = False
+        self.last_timing = None
         self.log("write_attempt", command=name, bytes=request.hex(" "))
         with stem.with_suffix(".rx").open("xb") as stream:
             written = self.link.write(request)
             started = self.clock()
+            write_time = {"utc": utc(), "monotonic_s": started}
+            first_time = None
+            self.log("write_completed", command=name, bytes=written, completed=started)
             if written != len(request):
                 raise RuntimeError(f"Short {name} write")
             deadline = started + duration
@@ -215,6 +220,8 @@ class Session:
                 except TimeoutError:
                     continue
                 completed = self.clock()
+                if first_time is None:
+                    first_time = {"utc": utc(), "monotonic_s": completed}
                 stream.write(received)
                 self.log("receive", command=name, bytes=len(received), completed=completed)
                 if not received or stream.tell() > limit or completed > deadline:
@@ -242,7 +249,12 @@ class Session:
             content, _ = decode_file_reply(bytes(primary_wire), file_bytes, sha256(content).hexdigest())
         elif len(primary) != 1:
             raise RuntimeError(f"{name} expected exactly one primary response")
-        self.log("settled_response", command=name, status_offsets=statuses, primary_frames=len(primary))
+        self.log("settled_response", command=name, status_offsets=statuses, primary_frames=len(primary),
+                 write_to_last_byte_s=last_byte - started, observation_s=self.clock() - started,
+                 quiet_tail_s=deadline - last_byte)
+        self.last_timing = {"clock_context": "Windows/Python perf_counter; host UTC",
+                            "request_write": write_time, "receive_first": first_time,
+                            "receive_end": {"utc": utc(), "monotonic_s": self.clock()}}
         self.settled = True
         if file_bytes is not None:
             return content
@@ -274,11 +286,15 @@ class Session:
         if len(ack) != 1:
             raise RuntimeError("Unexpected S93 acknowledgment shape")
 
-    def measurement(self, item, channel):
-        body = self.exchange(f"measure_{channel + 1}_{item}", frame(0x22, bytes([item, channel, 0])), 0xA2)
+    def measurement(self, item, channel, *, mode=0):
+        name = f"measure_{channel + 1}_{item}" + (f"_mode{mode}" if mode else "")
+        body = self.exchange(name, frame(0x22, bytes([item, channel, mode])), 0xA2)
         if len(body) > 32:
             raise RuntimeError("Measurement response exceeds display-text size")
-        return body.rstrip(b"\x00").decode("ascii")
+        return body.rstrip(b"\x00").decode("latin-1")
+
+    def native_wire(self, name):
+        return self.exchange(name, frame(2, b"\x01\x04"), 0x82, duration=3., limit=32768, waveform=True)
 
     def list_csv(self, name):
         sample = frame(0x11, CSV_DIR)
@@ -344,7 +360,7 @@ class Session:
         return result
 
     def capture(self, name, snapshot):
-        raw = self.exchange(name, frame(2, b"\x01\x04"), 0x82, duration=3., limit=32768, waveform=True)
+        raw = self.native_wire(name)
         result = decode_native_waveform([raw], selector=4)
         info = describe(snapshot)
         channels = {}
@@ -406,6 +422,22 @@ def _scope_volts(text):
     return None
 
 
+def restore_settings(session, baseline, outcome):
+    current = session.settings("before_restore")
+    current = session.set_fields("restore_scale", current, {i: baseline[i] for i in WRITABLE})
+    if _running(current) != _running(baseline):
+        session.key("restore_run_state", RUN_STOP)
+    restored = session.settings("restored")
+    outcome["restored"] = describe(restored)
+    comparison = compare_settings(baseline, restored)
+    outcome["restoration_comparison"] = comparison
+    outcome["restoration_verified"] = (not comparison["configuration_or_unclassified_changes"]
+                                        and _running(restored) == _running(baseline))
+    if not outcome["restoration_verified"]:
+        raise RuntimeError("Restoration readback has configuration differences")
+    return restored
+
+
 def workflow(session, mode, outcome):
     baseline = session.settings("initial")
     outcome["initial"] = describe(baseline)
@@ -414,7 +446,7 @@ def workflow(session, mode, outcome):
     if not all(baseline[i] == value for i, value in (
             (0, 1), (2, 0), (10, 1), (12, 0), (21, 0), (22, 0), (59, 0), (171, 0), (185, 0))):
         raise RuntimeError("Initial channel, trigger or acquisition settings differ from the reviewed fixture")
-    was_running = _running(baseline)
+    _running(baseline)
     changed = False
     try:
         changed = True
@@ -466,18 +498,7 @@ def workflow(session, mode, outcome):
             raise RuntimeError("Measured channel ratio does not support the expected probe assignment")
     finally:
         if changed and session.settled:
-            current = session.settings("before_restore")
-            current = session.set_fields("restore_scale", current, {i: baseline[i] for i in WRITABLE})
-            if _running(current) != was_running:
-                session.key("restore_run_state", RUN_STOP)
-            restored = session.settings("restored")
-            outcome["restored"] = describe(restored)
-            comparison = compare_settings(baseline, restored)
-            outcome["restoration_comparison"] = comparison
-            outcome["restoration_verified"] = (not comparison["configuration_or_unclassified_changes"]
-                                                and _running(restored) == was_running)
-            if not outcome["restoration_verified"]:
-                raise RuntimeError("Restoration readback has configuration differences")
+            restore_settings(session, baseline, outcome)
 
 
 def run(evidence, source, mode, *, hold, claim, screen, marker):

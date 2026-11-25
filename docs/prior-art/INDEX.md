@@ -25,6 +25,8 @@ These classifications may coexist. A tested predecessor can support reuse while 
 
 ## Acquisition
 
+**TEL-SVC-01 persistent Workbench service (HPA-P01/P03/P04, HPA-A01/A02/A03, HPA-S01/S02).** Reuses ACQ-11 native and frozen acquisition, S81/S22 framing and the shared guarded ownership lifecycle. The local client reads a timestamped firmware-measurement cache or queues one serialized operation. Host cache age and device acquisition freshness remain separate. [Service contract](../protocol/PERSISTENT_SERVICE.md)
+
 **ACQ-11 Workbench automated workflow (HPA-P01/P03/P04, HPA-A02/A03, HPA-S01/S02).** Reuses the retained Windows layer, strict native decoder, bounded status handling and interruption finalization. Uses scoped fresh settings patches and software SINGLE in the declared probe fixture. Voltage confidence remains separate from waveform retrieval and fixture restoration. [Workflow](../protocol/NATIVE_WAVEFORM_ACQ11.md) · [ADR-006](../adr/0006-workbench-acquisition-development.md)
 
 **ACQ-10C supervised native adapter (HPA-P01/P03, HPA-A02/A03, HPA-S01, HPA-L01).** Offline adapter and simulated evidence for one exact S02 write under existing Windows ownership controls. ACQ-10B established that the firmware bounds returning write calls while device-side blocking and recovery remain unresolved. ADR-005 records the scoped risk acceptance process. [Supervised procedure](../protocol/NATIVE_WAVEFORM_ACQ10C.md) · [Proportionate qualification ADR](../adr/0005-proportionate-instrument-qualification.md)
