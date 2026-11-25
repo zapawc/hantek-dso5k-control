@@ -2,6 +2,10 @@
 
 from ._acq11 import RUN_STOP, _running, describe
 from ._framing import frame
+from ._qualification import SCREEN, WINDOW
+from ._replies import Reply, observe
+from ._rgb565 import render
+from ._screens import REGIONS, region
 from ._settings import compare_settings
 
 # Qualified ACQ-11 BNC scales 7 (0.5 V/div) and 9 (2 V/div) also let the
@@ -12,7 +16,7 @@ ANALOG = {
     160: b"\x12", 188: b"\x00",
 }
 DIAGNOSTIC = {**ANALOG, 21: b"\x00", 22: b"\x00", 23: b"\x00", 24: b"\x00", 59: b"\x00"}
-EXTERNAL = {**ANALOG, 21: b"\x00", 22: b"\x03", 23: b"\x01", 24: b"\x00", 59: b"\x00"}
+EXTERNAL = {**DIAGNOSTIC, 22: b"\x02", 23: b"\x01", 25: b"\x0c\x00", 160: b"\x13"}
 
 
 def patch_profile(raw, edits):
@@ -20,7 +24,7 @@ def patch_profile(raw, edits):
         raise ValueError("The ACQ-12 profile requires the retained 208-byte layout")
     result = bytearray(raw)
     for offset, value in edits.items():
-        if offset not in DIAGNOSTIC or len(value) != len(DIAGNOSTIC[offset]):
+        if offset not in EXTERNAL or len(value) != len(EXTERNAL[offset]):
             raise ValueError(f"Unsupported ACQ-12 settings span at {offset}")
         result[offset:offset + len(value)] = value
     return bytes(result)
@@ -40,6 +44,11 @@ def apply_profile(session, name, current, fields):
 def restore(session, baseline, outcome, fields):
     with session.recovery():
         current = session.settings("before_acq12_restore")
+        if _running(current) and not _running(baseline):
+            session.key("acq12_disarm", RUN_STOP)
+            current = session.settings("acq12_disarmed")
+            if _running(current):
+                raise RuntimeError("Scope did not stop before settings restoration")
         previous_fields = {offset: baseline[offset:offset + len(value)] for offset, value in fields.items()}
         current = apply_profile(session, "acq12_restore_settings", current, previous_fields)
         if _running(current) != _running(baseline):
@@ -51,3 +60,35 @@ def restore(session, baseline, outcome, fields):
                                          and _running(baseline) == _running(final)))
     if not outcome["restoration_verified"]:
         raise RuntimeError("ACQ-12 scope restoration did not match its baseline")
+
+
+def screen_status(session, name):
+    """Preserve one RGB565 display reply and extract the reviewed trigger-status region."""
+    if not session.settled:
+        raise RuntimeError("Previous command has unresolved history")
+    if session.job_check is not None:
+        session.job_check()
+    folder = session.evidence
+    session.count += 1
+    stem = f"{session.count:03d}-{name}"
+    (folder / (stem + ".tx")).write_bytes(SCREEN)
+    session.settled = False
+    with (folder / (stem + ".rx")).open("xb") as raw, (folder / (stem + ".rgb565")).open("xb") as pixels:
+        reply = Reply(0xA0, pixels, session.log)
+        session.log("write_attempt", command=name, bytes=SCREEN.hex(" "))
+        written = session.link.write(SCREEN)
+        started = session.clock()
+        session.log("write_completed", command=name, bytes=written, completed=started)
+        if written != len(SCREEN):
+            raise RuntimeError("Short screen request")
+        transport = observe(session.link, session.clock, started, WINDOW, raw, session.log,
+                            limit=768470, reply=reply)
+        result = reply.finish()
+    if (not transport["complete"] or not result["primary_complete"] or result["frame_errors"]
+            or result["malformed_or_ambiguous"]):
+        raise RuntimeError("Incomplete or ambiguous scope display exchange")
+    session.settled = True
+    source = folder / (stem + ".rgb565")
+    render(source, folder / (stem + ".png"))
+    result["status_pixels"] = region(source.read_bytes(), REGIONS["trigger_status"][1])
+    return result

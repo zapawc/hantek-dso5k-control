@@ -1,7 +1,7 @@
 """Run the ACQ-12 bench fixture with the existing Hantek lease and evidence journal."""
 
 import argparse
-import csv
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -9,8 +9,8 @@ import sys
 from time import monotonic, sleep
 
 from fixture import command, decode_pulses, open_fixture
-from hantek_dso5k._acq11 import RUN_STOP, _running, describe, run
-from hantek_dso5k._acq12 import DIAGNOSTIC, apply_profile, restore
+from hantek_dso5k._acq11 import RUN_STOP, SINGLE, _running, describe, run
+from hantek_dso5k._acq12 import DIAGNOSTIC, EXTERNAL, apply_profile, restore, screen_status
 from hantek_dso5k._host import assess_host, host_snapshot, lease
 from hantek_dso5k._pair_windows import _claim_pair, _source_commit
 from hantek_dso5k._session import state_path
@@ -30,7 +30,7 @@ def confirm_idle(device):
     return report
 
 
-def inspect_capture(folder, name, capture, expected):
+def inspect_capture(capture, expected):
     channels = {}
     for channel in ("CH1", "CH2"):
         if not capture["availability"].get(channel):
@@ -94,7 +94,7 @@ def diagnostic(session, outcome, device, expected):
         sleep(0.12)
         captured = session.capture("diagnostic_pattern", running)
         outcome["pattern_capture"] = captured
-        outcome["pattern_decoded"] = inspect_capture(session.evidence, "diagnostic_pattern", captured, expected)
+        outcome["pattern_decoded"] = inspect_capture(captured, expected)
     finally:
         try:
             outcome["terminal_fixture"] = confirm_idle(device)
@@ -103,26 +103,99 @@ def diagnostic(session, outcome, device, expected):
                 restore(session, baseline, outcome, DIAGNOSTIC)
 
 
+def external(session, outcome, device, event_ids, ready_digest):
+    baseline = session.settings("acq12_initial")
+    outcome["initial"] = describe(baseline)
+    if _running(baseline) or baseline[171] or baseline[179] or baseline[185]:
+        raise RuntimeError("Start in stopped ordinary YT sample mode with Math disabled")
+    outcome["fixture"] = fixture_request(device, "INFO")
+    idle = confirm_idle(device)
+    if event_ids and (event_ids != sorted(set(event_ids)) or event_ids[0] <= idle["last_accepted_id"]):
+        raise RuntimeError("Event IDs must increase past the fixture's last accepted ID")
+    try:
+        configured = apply_profile(session, "acq12_external_settings", baseline, EXTERNAL)
+        outcome["configured"] = describe(configured)
+        outcome["trials"] = trials = []
+        for event_id in event_ids or [None]:
+            row = {"requested_event_id": event_id, "fixture_idle": confirm_idle(device)}
+            trials.append(row)
+            session.key("acq12_single", SINGLE)
+            row["arming_requested"] = True
+            first = session.settings("acq12_after_single")
+            display = screen_status(session, "acq12_arm_display")
+            digest = sha256(display.pop("status_pixels")).hexdigest()
+            row["display"] = display
+            row["display_trigger_status_sha256"] = digest
+            second = session.settings("acq12_after_arm_display")
+            row["scope_states_before_event"] = [first[20], second[20]]
+            waiting = first[20] == second[20] == 1
+            row["arm_ready"] = bool(waiting and ready_digest == digest)
+            if event_id is None:
+                row["no_trigger_observation"] = waiting
+                row["outcome"] = "no_trigger_timeout" if waiting else "premature_completion"
+                break
+            if not row["arm_ready"]:
+                row["outcome"] = "readiness_unavailable"
+                break
+            row["event_requested_host_monotonic"] = monotonic()
+            row["fixture_ack"] = fixture_request(device, f"EVENT {event_id}")
+            for _ in range(4):
+                frozen = session.settings("acq12_wait_for_stop")
+                if _running(frozen):
+                    continue
+                row["completion_state"] = frozen[20]
+                break
+            else:
+                row["outcome"] = "no_trigger_timeout"
+                break
+            native = session.capture(f"event_{event_id}", frozen)
+            row["native"] = native
+            row["decoded"] = decoded = inspect_capture(native, event_id)
+            accepted = set(decoded) == {"CH1", "CH2"} and all(ch["accepted"] for ch in decoded.values())
+            row["outcome"] = "common_event" if accepted else "unproven_waveform"
+            if not accepted:
+                break
+    finally:
+        try:
+            outcome["terminal_fixture"] = confirm_idle(device)
+        finally:
+            if session.settled:
+                restore(session, baseline, outcome, EXTERNAL)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True)
-    parser.add_argument("--event", required=True, type=int)
+    parser.add_argument("--mode", choices=["diagnostic", "external"], default="diagnostic")
+    parser.add_argument("--event", action="append", default=[], type=int)
+    parser.add_argument("--ready-digest")
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--overwrite-stopped", action="store_true", required=True)
     args = parser.parse_args()
-    if not 1 <= args.event <= 65535:
+    if any(not 1 <= event <= 65535 for event in args.event):
         parser.error("event must be 1–65535")
+    if args.mode == "diagnostic" and len(args.event) != 1:
+        parser.error("diagnostic requires one event ID")
+    if args.mode == "external" and args.event and not args.ready_digest:
+        parser.error("external stimulation requires an independently observed ready screen digest")
     source = os.environ["HANTEK_ACQ12_SOURCE"]
     _source_commit(source)
     with open_fixture(args.port) as device:
+        def execute(session, mode, outcome):
+            if mode == "diagnostic":
+                diagnostic(session, outcome, device, args.event[0])
+            else:
+                external(session, outcome, device, args.event, args.ready_digest)
+
         result = run(
-            args.evidence, source, "diagnostic", hold=lease, claim=_claim_pair,
+            args.evidence, source, args.mode, hold=lease, claim=_claim_pair,
             screen=lambda: assess_host(host_snapshot(), os.getpid(), (sys.executable, sys._base_executable)),
-            marker=state_path(), execute=lambda session, mode, outcome: diagnostic(session, outcome, device, args.event),
-            operation="ACQ-12",
+            marker=state_path(), execute=execute, operation="ACQ-12",
         )
     print(json.dumps({key: value for key, value in result.items() if key not in
-                      ("artifacts", "pattern_capture", "idle_capture", "pattern_decoded")}, indent=2))
+                      ("artifacts", "pattern_capture", "idle_capture", "pattern_decoded", "trials")}, indent=2))
+    for trial in result.get("trials", []):
+        print(json.dumps({key: value for key, value in trial.items() if key not in ("native", "decoded")}))
     for channel, row in result.get("pattern_decoded", {}).items():
         print(json.dumps({"channel": channel, "decoded": row["accepted"],
                           "candidate_ids": [packet["event_id"] for packet in row["decoded_candidates"]],
