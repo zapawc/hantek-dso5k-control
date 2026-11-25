@@ -355,7 +355,7 @@ class Session:
         request = b"C" + sample[1:-1] + bytes([(sample[-1] - 16) & 255])
         return parse_listing(self.exchange(name, request, 0x91, duration=2.0, limit=16384))
 
-    def frozen(self, snapshot, *, preserved=None):
+    def frozen(self, snapshot, *, preserved=None, summary_prefix="frozen"):
         if _running(snapshot) or snapshot[206:208] != b"\x30\x01" or snapshot[188] != 0:
             raise RuntimeError("Frozen fallback requires stopped 4K acquisition and the visible CSV menu")
         known = self.list_csv("csv_baseline")
@@ -401,7 +401,7 @@ class Session:
                 if metrics["timebase_header"] not in (f"{expected_ps}(ps)", f"{wrapped_ps}(ps)"):
                     raise RuntimeError("Frozen CSV timebase does not match the stopped settings")
                 channel = expected.get(int(metrics["voltbase_header"].split("(")[0]))
-                create_record(self.evidence / f"frozen_{index}_measurements.json",
+                create_record(self.evidence / f"{summary_prefix}_{index}_measurements.json",
                               dict(metrics, attributed_channel=channel))
                 if channel is None or channel in result:
                     raise RuntimeError("CSV voltage-base header does not uniquely identify the source slot")

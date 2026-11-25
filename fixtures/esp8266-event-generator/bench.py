@@ -1,6 +1,7 @@
 """Run the ACQ-12 bench fixture with the existing Hantek lease and evidence journal."""
 
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import sys
 from time import monotonic, sleep
 
 from fixture import command, inspect_capture, open_fixture
+from logic_reference import analyze_reference, compare_reference, record_reference
 from hantek_dso5k._acq11 import RUN_STOP, SINGLE, _running, describe, run
 from hantek_dso5k._acq12 import (
     DIAGNOSTIC, EXTERNAL, apply_profile, close_frozen_file_list, restore, restore_panel, screen_status, set_timebase,
@@ -73,7 +75,7 @@ def diagnostic(session, outcome, device, expected):
 
 
 def external(session, outcome, device, event_ids, ready_digest, path, *, baseline=None,
-             restoration_required=None, timebase=19, profile=EXTERNAL):
+             restoration_required=None, timebase=19, profile=EXTERNAL, logic_cli=None):
     if baseline is None:
         baseline = session.settings("acq12_initial")
     outcome["initial"] = describe(baseline)
@@ -116,9 +118,13 @@ def external(session, outcome, device, event_ids, ready_digest, path, *, baselin
                 break
             if session.job_check is not None:
                 session.job_check()
-            row["event_requested_host_utc"] = utc()
-            row["event_requested_host_monotonic"] = monotonic()
-            row["fixture_ack"] = fixture_request(device, f"EVENT {event_id}")
+            reference = record_reference(logic_cli, session.evidence, event_id) if logic_cli else nullcontext(None)
+            with reference as logic_capture:
+                if logic_cli and session.settings("acq12_ready_after_logic_start")[20] != 1:
+                    raise RuntimeError("Scope left the ready state while starting the timing reference")
+                row["event_requested_host_utc"] = utc()
+                row["event_requested_host_monotonic"] = monotonic()
+                row["fixture_ack"] = fixture_request(device, f"EVENT {event_id}")
             for _ in range(4):
                 frozen = session.settings("acq12_wait_for_stop")
                 if _running(frozen):
@@ -137,7 +143,7 @@ def external(session, outcome, device, event_ids, ready_digest, path, *, baselin
             accepted = set(decoded) == {"CH1", "CH2"} and all(ch["accepted"] for ch in decoded.values())
             if not accepted and path != "native" and frozen[206:208] == b"\x30\x01":
                 row["frozen_csv"] = exported = {}
-                session.frozen(frozen, preserved=exported)
+                session.frozen(frozen, preserved=exported, summary_prefix=f"frozen_{event_id}")
                 csv_capture = {"availability": {channel: True for channel in exported},
                                "channels": {channel: {**record, "clipped": None}
                                             for channel, record in exported.items()}}
@@ -167,6 +173,15 @@ def external(session, outcome, device, event_ids, ready_digest, path, *, baselin
             row["fixture_end"] = fixture_request(device, "STATUS")
             if row["fixture_end"]["last_completed_id"] != event_id or row["fixture_end"]["high_mask"]:
                 raise RuntimeError("Fixture did not report completed and idle after capture")
+            if logic_capture is not None:
+                try:
+                    if logic_capture.get("error"):
+                        raise RuntimeError(logic_capture["error"])
+                    reference = analyze_reference((session.evidence / f"logic_{event_id}.bin").read_bytes(), event_id)
+                    row["independent_reference"] = reference
+                    row["independent_comparison"] = compare_reference(reference, decoded, event_id)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    row["independent_reference_error"] = str(exc)
     finally:
         try:
             outcome["terminal_fixture"] = confirm_idle(device)
@@ -221,6 +236,7 @@ def main():
     parser.add_argument("--path", choices=["auto", "native", "frozen"], default="auto")
     parser.add_argument("--original-settings-rx", type=Path)
     parser.add_argument("--contrast", action="store_true", help="8 ms/div, 144 mV EXT and swapped vertical scales")
+    parser.add_argument("--logic-cli", type=Path, help="Approved sigrok CLI for an attached three-channel FX2LP reference")
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--overwrite-stopped", action="store_true", required=True)
     args = parser.parse_args()
@@ -234,6 +250,8 @@ def main():
         parser.error("restore-panel requires the original settings exchange")
     if args.contrast and args.mode != "external":
         parser.error("contrast applies only to an external trial")
+    if args.logic_cli and (args.mode != "external" or not args.event or not args.logic_cli.is_file()):
+        parser.error("logic reference requires an existing sigrok CLI and a requested external event")
     source = os.environ["HANTEK_ACQ12_SOURCE"]
     _source_commit(source)
     with open_fixture(args.port) as device:
@@ -254,10 +272,12 @@ def main():
                                8: EXTERNAL[18], 18: EXTERNAL[8], 25: b"\x12\x00"}
                     timebase = 20
                 external(session, outcome, device, args.event, args.ready_digest, args.path,
-                         profile=profile, timebase=timebase)
+                         profile=profile, timebase=timebase, logic_cli=args.logic_cli)
                 if args.event and (len(outcome["trials"]) != len(args.event)
                                    or any(trial["outcome"] != "common_event" for trial in outcome["trials"])):
                     raise RuntimeError("The requested series did not preserve a verified event on both channels")
+                if args.logic_cli and any("independent_comparison" not in trial for trial in outcome["trials"]):
+                    raise RuntimeError("The independent timing comparison is incomplete")
 
         result = run(
             args.evidence, source, args.mode, hold=lease, claim=_claim_pair,
