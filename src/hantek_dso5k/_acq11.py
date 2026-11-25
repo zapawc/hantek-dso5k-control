@@ -27,6 +27,7 @@ TIMEBASE = tuple(round(m * 10. ** e, 12) for e in range(-9, 2)
                  for m in (2, 4, 8) if m * 10. ** e <= 40)
 WRITABLE = {1: (1, 12), 5: (0, 3), 11: (1, 12), 15: (0, 3)}
 RUN_STOP, SINGLE = 19, 18
+COUNTS_PER_DIVISION = 10.0
 
 
 def describe(raw):
@@ -73,7 +74,7 @@ def patch_settings(raw, edits):
 
 def analyze(samples, *, bncvdiv, probe, offset, interval):
     """Report display-code derived voltage and edge statistics on a relative time axis."""
-    values = [(sample - offset) * bncvdiv * probe / 25 for sample in samples]
+    values = [(sample - offset) * bncvdiv * probe / COUNTS_PER_DIVISION for sample in samples]
     low, high = min(values), max(values)
     limit = (low + high) / 2
     rising, falling = [], []
@@ -213,15 +214,16 @@ class Session:
         capture = {"status_offsets": list(result.status_offsets), "terminal": result.terminal_seen,
                    "availability": {c.channel: c.samples is not None for c in result.channels},
                    "channels": channels, "time_origin": "relative sample zero", "same_shot": "UNPROVEN",
-                   "scale_provenance": "S81 and display-code / viewport mapping checked against nominal fixture"}
+                   "counts_per_division": COUNTS_PER_DIVISION,
+                   "scale_provenance": "Retained firmware display gain candidate from CH1 S22; absolute DC origin unverified"}
         create_record(self.evidence / f"{name}.json", capture)
         return capture
 
 
 def _running(state):
-    if state[20] not in (0, 1, 2, 3):
+    if state[20] not in (0, 1, 2, 3, 5):
         raise RuntimeError("Unrecognized acquisition state")
-    return state[20] != 0
+    return state[20] not in (0, 5)
 
 
 def _plausible(capture):
@@ -253,7 +255,7 @@ def workflow(session, mode, outcome):
     changed = False
     try:
         changed = True
-        configured = session.set_fields("fixture_scale", baseline, {1: 7, 5: 1, 11: 9, 15: 0})
+        configured = session.set_fields("fixture_scale", baseline, {1: 6, 5: 1, 11: 9, 15: 0})
         if not _running(configured):
             session.key("start_running", RUN_STOP)
         running = session.settings("running")
@@ -264,11 +266,18 @@ def workflow(session, mode, outcome):
         outcome["running_plausible"] = _plausible(outcome["running"])
         outcome["running_periodic"] = _periodic_pair(outcome["running"])
         outcome["scope_measurements"] = {
-            ch: {str(item): session.measurement(item, index) for item in (1, 4)}
+            ch: {str(item): session.measurement(item, index) for item in (1, 4, 6, 7)}
             for index, ch in enumerate(("CH1", "CH2"))
         }
         if not outcome["running_periodic"]:
             raise RuntimeError("Running waveform failed dual-channel periodicity and clipping checks")
+        reference = outcome["scope_measurements"]["CH1"]["4"]
+        if reference.endswith("V") and reference[:-1].replace(".", "", 1).isdigit():
+            scope_vpp = float(reference[:-1])
+            native_vpp = outcome["running"]["channels"]["CH1"]["vpp_v"]
+            outcome["ch1_vpp_crosscheck"] = math.isclose(native_vpp, scope_vpp, rel_tol=0.15)
+        else:
+            outcome["ch1_vpp_crosscheck"] = False
         if mode == "full":
             session.key("arm_single", SINGLE)
             for attempt in range(1, 5):
@@ -280,7 +289,8 @@ def workflow(session, mode, outcome):
                     break
             if not outcome.get("single") or not _periodic_pair(outcome["single"]):
                 raise RuntimeError("SINGLE stopped waveform unavailable or failed periodicity checks")
-        if not outcome["running_plausible"] or (mode == "full" and not outcome["single_plausible"]):
+        if (not outcome["running_plausible"] or not outcome["ch1_vpp_crosscheck"]
+                or (mode == "full" and not outcome["single_plausible"])):
             raise RuntimeError("Waveform captured but nominal voltage limits were not met")
     finally:
         if changed and session.settled:
