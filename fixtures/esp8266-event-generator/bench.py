@@ -152,6 +152,17 @@ def external(session, outcome, device, event_ids, ready_digest):
             row["native"] = native
             row["decoded"] = decoded = inspect_capture(native, event_id)
             accepted = set(decoded) == {"CH1", "CH2"} and all(ch["accepted"] for ch in decoded.values())
+            if not accepted and frozen[206:208] == b"\x30\x01":
+                row["frozen_csv"] = exported = {}
+                session.frozen(frozen, preserved=exported)
+                csv_capture = {"availability": {channel: True for channel in exported},
+                               "channels": {channel: {**record, "clipped": None}
+                                            for channel, record in exported.items()}}
+                row["frozen_decoded"] = decoded = inspect_capture(csv_capture, event_id)
+                accepted = set(decoded) == {"CH1", "CH2"} and all(ch["accepted"] for ch in decoded.values())
+                row["retrieval_method"] = "frozen_csv"
+            else:
+                row["retrieval_method"] = "native_s02"
             row["outcome"] = "common_event" if accepted else "unproven_waveform"
             if not accepted:
                 break

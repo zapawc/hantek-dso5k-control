@@ -16,7 +16,9 @@ ANALOG = {
     160: b"\x12", 188: b"\x00",
 }
 DIAGNOSTIC = {**ANALOG, 21: b"\x00", 22: b"\x00", 23: b"\x00", 24: b"\x00", 59: b"\x00"}
-EXTERNAL = {**DIAGNOSTIC, 22: b"\x02", 23: b"\x01", 25: b"\x0c\x00", 160: b"\x13"}
+# Retained firmware normalized a Normal-mode S11 write to mode 0 while
+# stopped. Arm behavior in this mode must be demonstrated by the display.
+EXTERNAL = {**DIAGNOSTIC, 22: b"\x02", 25: b"\x0c\x00", 160: b"\x13"}
 
 
 def patch_profile(raw, edits):
@@ -36,8 +38,10 @@ def apply_profile(session, name, current, fields):
         return current
     ack = session.exchange(name, frame(0x11, payload), 0x91, duration=1.8)
     observed = session.settings(name + "_readback")
-    if ack != b"\x00" or compare_settings(payload, observed)["configuration_or_unclassified_changes"]:
-        raise RuntimeError(f"{name} did not produce the expected complete settings readback")
+    differences = compare_settings(payload, observed)["configuration_or_unclassified_changes"]
+    if ack != b"\x00" or differences:
+        fields = ", ".join(change["field"] for change in differences)
+        raise RuntimeError(f"{name} acknowledgment {ack.hex()}, readback differences: {fields or 'none'}")
     return observed
 
 
