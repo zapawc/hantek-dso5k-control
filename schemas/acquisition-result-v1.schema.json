@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Host acquisition result v1 (native S02/S82)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "host_run_id",
+    "source_method",
+    "selector",
+    "instrument",
+    "timing",
+    "configuration_snapshot",
+    "channels",
+    "transport_integrity",
+    "terminal_seen",
+    "s92_status_offsets",
+    "measurement_validity",
+    "data_freshness",
+    "channel_association",
+    "acquisition_coherence",
+    "device_generation_id",
+    "artifacts",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "host_run_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "source_method": { "const": "native_s02_s82" },
+    "selector": { "enum": [0, 1, 4] },
+    "instrument": { "$ref": "#/$defs/instrument" },
+    "timing": { "$ref": "#/$defs/timing" },
+    "configuration_snapshot": { "type": ["object", "null"] },
+    "channels": { "type": "array", "items": {"$ref": "#/$defs/channel"}, "maxItems": 3 },
+    "transport_integrity": { "enum": ["verified_wire", "failed"] },
+    "terminal_seen": { "type": ["boolean", "null"] },
+    "s92_status_offsets": { "type": "array", "items": {"type": "integer", "minimum": 0}, "uniqueItems": true },
+    "measurement_validity": { "const": "unverified" },
+    "data_freshness": { "const": "unknown" },
+    "channel_association": { "enum": ["s82_slot_order", "unverified"] },
+    "acquisition_coherence": { "const": "unproven" },
+    "device_generation_id": { "const": null },
+    "artifacts": { "type": "array", "items": {"$ref": "#/$defs/artifact"} },
+    "errors": { "type": "array", "items": {"$ref": "#/$defs/error"}, "maxItems": 1 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": {"transport_integrity": {"const": "verified_wire"}} },
+      "then": {
+        "properties": {
+          "channels": { "minItems": 1 },
+          "channel_association": { "const": "s82_slot_order" },
+          "errors": { "maxItems": 0 },
+          "terminal_seen": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "if": { "properties": {"transport_integrity": {"const": "failed"}} },
+      "then": {
+        "properties": {
+          "channels": { "maxItems": 0 },
+          "channel_association": { "const": "unverified" },
+          "errors": { "minItems": 1 },
+          "terminal_seen": { "const": null },
+          "s92_status_offsets": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "transport_integrity": {"const": "verified_wire"}, "selector": {"const": 0} }
+      },
+      "then": {
+        "properties": {
+          "channels": {
+            "minItems": 1,
+            "maxItems": 1,
+            "prefixItems": [{"properties": {"channel": {"const": "CH1"}}}]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "transport_integrity": {"const": "verified_wire"}, "selector": {"const": 1} }
+      },
+      "then": {
+        "properties": {
+          "channels": {
+            "minItems": 1,
+            "maxItems": 1,
+            "prefixItems": [{"properties": {"channel": {"const": "CH2"}}}]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "transport_integrity": {"const": "verified_wire"}, "selector": {"const": 4} }
+      },
+      "then": {
+        "properties": {
+          "channels": {
+            "minItems": 3,
+            "maxItems": 3,
+            "prefixItems": [
+              { "properties": {"channel": {"const": "CH1"}} },
+              { "properties": {"channel": {"const": "CH2"}} },
+              { "properties": {"channel": {"const": "MATH"}} }
+            ]
+          },
+          "terminal_seen": { "const": true }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transport_integrity": { "const": "verified_wire" },
+          "selector": { "enum": [0, 1] },
+          "channels": { "prefixItems": [{"properties": {"availability": {"const": "available"}}}] }
+        }
+      },
+      "then": { "properties": {"terminal_seen": {"const": true}} }
+    },
+    {
+      "if": {
+        "properties": {
+          "transport_integrity": { "const": "verified_wire" },
+          "selector": { "enum": [0, 1] },
+          "channels": { "prefixItems": [{"properties": {"availability": {"const": "unavailable"}}}] }
+        }
+      },
+      "then": { "properties": {"terminal_seen": {"const": false}} }
+    }
+  ],
+  "$defs": {
+    "instrument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "firmware", "provenance"],
+      "properties": {
+        "model": { "anyOf": [{"type": "string", "minLength": 1, "pattern": "\\S"}, {"type": "null"}] },
+        "firmware": { "anyOf": [{"type": "string", "minLength": 1, "pattern": "\\S"}, {"type": "null"}] },
+        "provenance": { "anyOf": [{"type": "string", "minLength": 1, "pattern": "\\S"}, {"type": "null"}] }
+      },
+      "if": {
+        "anyOf": [
+          { "properties": {"model": {"type": "string", "minLength": 1, "pattern": "\\S"}} },
+          { "properties": {"firmware": {"type": "string", "minLength": 1, "pattern": "\\S"}} }
+        ]
+      },
+      "then": { "properties": {"provenance": {"type": "string", "minLength": 1, "pattern": "\\S"}} }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clock_context", "request_write", "receive_first", "receive_end"],
+      "properties": {
+        "clock_context": { "anyOf": [{"type": "string", "minLength": 1, "pattern": "\\S"}, {"type": "null"}] },
+        "request_write": { "anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}] },
+        "receive_first": { "anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}] },
+        "receive_end": { "anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}] }
+      },
+      "if": { "properties": {"clock_context": {"const": null}} },
+      "then": {
+        "properties": {
+          "request_write": { "const": null },
+          "receive_first": { "const": null },
+          "receive_end": { "const": null }
+        }
+      }
+    },
+    "timestamp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["utc", "monotonic_s"],
+      "properties": {
+        "utc": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|\\+00:00)$"
+            }
+          ]
+        },
+        "monotonic_s": { "type": ["number", "null"], "minimum": 0 }
+      },
+      "anyOf": [
+        { "properties": {"utc": {"type": "string", "minLength": 1, "pattern": "\\S"}} },
+        { "properties": {"monotonic_s": {"type": "number"}} }
+      ]
+    },
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "availability",
+        "sample_count",
+        "raw",
+        "engineering",
+        "conversion_status",
+        "conversion_reason"
+      ],
+      "properties": {
+        "channel": { "enum": ["CH1", "CH2", "MATH"] },
+        "availability": { "enum": ["available", "unavailable"] },
+        "sample_count": { "type": ["integer", "null"], "minimum": 1, "maximum": 40000 },
+        "raw": { "anyOf": [{"type": "null"}, {"$ref": "#/$defs/raw"}] },
+        "engineering": { "anyOf": [{"type": "null"}, {"$ref": "#/$defs/engineering"}] },
+        "conversion_status": { "enum": ["converted", "raw_only", "unavailable"] },
+        "conversion_reason": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": {"conversion_status": {"const": "converted"}} },
+          "then": {
+            "properties": {
+              "availability": { "const": "available" },
+              "sample_count": { "type": "integer" },
+              "raw": { "type": "object" },
+              "engineering": { "type": "object" },
+              "conversion_reason": { "const": null },
+              "channel": { "enum": ["CH1", "CH2"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": {"conversion_status": {"const": "raw_only"}} },
+          "then": {
+            "properties": {
+              "availability": { "const": "available" },
+              "sample_count": { "type": "integer" },
+              "raw": { "type": "object" },
+              "engineering": { "const": null },
+              "conversion_reason": {
+                "enum": [
+                  "scaling_metadata_missing",
+                  "scaling_metadata_unverified",
+                  "scaling_metadata_invalid",
+                  "scaling_metadata_inconsistent",
+                  "math_scaling_unsupported"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": {"conversion_status": {"const": "unavailable"}} },
+          "then": {
+            "properties": {
+              "availability": { "const": "unavailable" },
+              "sample_count": { "const": null },
+              "raw": { "const": null },
+              "engineering": { "const": null },
+              "conversion_reason": { "const": "instrument_reported_no_data" }
+            }
+          }
+        }
+      ]
+    },
+    "raw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "values"],
+      "properties": {
+        "unit": { "const": "display_code" },
+        "values": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": -128, "maximum": 127 },
+          "minItems": 1,
+          "maxItems": 40000
+        }
+      }
+    },
+    "engineering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "voltage_unit",
+        "values",
+        "time_unit",
+        "sample_interval_s",
+        "time_origin_s",
+        "time_reference"
+      ],
+      "properties": {
+        "voltage_unit": { "const": "V" },
+        "values": { "type": "array", "items": {"type": "number"}, "minItems": 1, "maxItems": 40000 },
+        "time_unit": { "const": "s" },
+        "sample_interval_s": { "type": "number", "exclusiveMinimum": 0 },
+        "time_origin_s": { "type": "number" },
+        "time_reference": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "locator", "bytes", "sha256"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "locator": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "detail"],
+      "properties": {
+        "code": { "const": "invalid_s82_observation" },
+        "detail": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      }
+    }
+  }
+}

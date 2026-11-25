@@ -1,3 +1,4 @@
+include schemas/acquisition-result-v1.schema.json
 include schemas/capture-manifest-v2.schema.json
 include schemas/file-transfer-v1.schema.json
 include schemas/settings-v2.schema.json
