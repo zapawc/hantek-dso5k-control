@@ -183,6 +183,7 @@ class Session:
         self.count = 0
         self.settled = True
         self.last_timing = None
+        self.last_receive = None
         self.rapid_reads = False
         self.job_check = None
 
@@ -217,6 +218,7 @@ class Session:
         self.count += 1
         self.settled = False
         self.last_timing = None
+        self.last_receive = None
         self.log("write_attempt", command=name, bytes=request.hex(" "))
         with stem.with_suffix(".rx").open("xb") as stream:
             written = self.link.write(request)
@@ -279,8 +281,8 @@ class Session:
                  quiet_tail_s=quiet)
         self.last_timing = {"clock_context": "Windows/Python perf_counter; host UTC",
                             "request_write": write_time, "receive_first": first_time,
-                            "receive_last": last_time,
                             "receive_end": {"utc": utc(), "monotonic_s": self.clock()}}
+        self.last_receive = last_time
         self.settled = True
         if file_bytes is not None:
             return content
@@ -353,13 +355,13 @@ class Session:
         request = b"C" + sample[1:-1] + bytes([(sample[-1] - 16) & 255])
         return parse_listing(self.exchange(name, request, 0x91, duration=2.0, limit=16384))
 
-    def frozen(self, snapshot):
+    def frozen(self, snapshot, *, preserved=None):
         if _running(snapshot) or snapshot[206:208] != b"\x30\x01" or snapshot[188] != 0:
             raise RuntimeError("Frozen fallback requires stopped 4K acquisition and the visible CSV menu")
         known = self.list_csv("csv_baseline")
         if not known:
             raise RuntimeError("No established mounted CSV directory")
-        result = {}
+        result = {} if preserved is None else preserved
         scales = describe(snapshot)["channels"]
         expected = {round(v["bnc_v_per_div"] * v["software_probe"] * 1e6): ch for ch, v in scales.items()}
         if len(expected) != 2:

@@ -56,9 +56,10 @@ def snapshot(session, raw, job_id, *, retain=True, physical_probes=None):
                                           and scale["software_probe"] == physical_probes[channel.channel]),
         }
     timing = session.last_timing if isinstance(session.last_timing, dict) else None
+    observation = dict(timing, receive_last=session.last_receive) if timing and isinstance(session, Session) else timing
     summary = {"method": "native_s02", "status_offsets": list(decoded.status_offsets),
                "availability": {slot.channel: slot.samples is not None for slot in decoded.channels},
-               "derived_measurements": derived, "timing": timing, "acquisition_id": job_id,
+               "derived_measurements": derived, "timing": observation, "acquisition_id": job_id,
                "same_shot": "UNPROVEN"}
     if not retain:
         return summary
@@ -112,9 +113,12 @@ def triggered(session, baseline, job_id, request, result, restoration_required):
                 raise Unsupported("Stopped native returned unavailable analog slots")
         if frozen[206:208] != b"\x30\x01":
             raise Unsupported("Stopped native data unavailable and the frozen CSV menu is not selected")
-        result["frozen"] = session.frozen(frozen)
-        result["method"] = "frozen_csv"
-        result["acquisition_outcome"] = "succeeded"
+        result["frozen"] = preserved = {}
+        try:
+            session.frozen(frozen, preserved=preserved)
+        finally:
+            if set(preserved) == {"CH1", "CH2"}:
+                result.update(method="frozen_csv", acquisition_outcome="succeeded")
     finally:
         if session.settled:
             with session.recovery() if isinstance(session, Session) else nullcontext():

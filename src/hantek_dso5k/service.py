@@ -16,13 +16,13 @@ import secrets
 import stat
 import subprocess
 import sys
-from threading import Condition, Thread
+from threading import BoundedSemaphore, Condition, Thread
 from time import monotonic
 from uuid import uuid4
 
 from . import _dw_profile as dw
 
-from ._acq11 import Session, describe
+from ._acq11 import Session, _running, describe
 from ._host import assess_host, finalization_guard, host_snapshot, lease, require_no_finalization
 from ._native_finalization import create_record, prepare, publish
 from ._pair_windows import _claim_pair, _source_commit
@@ -77,11 +77,18 @@ class Service:
     def __init__(self, evidence, *, interval, stale_after, measurements, clock=monotonic,
                  channels=CHANNELS, source="s22", settings_every=None, waveform_every=1.,
                  instrument_id="hantek-dso5102p", rapid_reads=False, physical_probes=None,
-                 detailed=False, configured_slots_only=False):
+                 detailed=False, configured_slots_only=False, priority=()):
         self.evidence = Path(evidence)
         self.interval, self.stale_after, self.clock = interval, stale_after, clock
         self.channels = channels
         self.sensors = [(ch, name) for name in measurements if name in ITEMS for ch in channels]
+        self.poll_order = list(self.sensors)
+        preferred = [sensor for sensor in self.sensors if sensor[1] in priority]
+        ordinary = [sensor for sensor in self.sensors if sensor[1] not in priority]
+        if preferred and ordinary:
+            self.poll_order = [sensor for index, other in enumerate(ordinary)
+                               for sensor in (preferred[index % len(preferred)], other)]
+            self.poll_order.extend(preferred[len(ordinary):])
         self.wave_quantities = tuple(measurements)
         self.source = source
         self.settings_every, self.waveform_every = settings_every, waveform_every
@@ -210,7 +217,7 @@ class Service:
             self.next_wave = self.clock() + self.waveform_every
             if self.source == "waveform":
                 return
-        channel, kind = self.sensors[index]
+        channel, kind = self.poll_order[index]
         settings = self.current_settings()
         code, units = ITEMS[kind]
         started = self.clock()
@@ -250,7 +257,7 @@ class Service:
     def _poll_waveform(self, session):
         setup = self.current_settings()
         observation = None
-        if setup["trigger_state_code"] not in (0, 5):
+        if _running(self.raw_settings):
             observation = snapshot(session, self.raw_settings, uuid4().hex, retain=False,
                                    physical_probes=self.physical_probes)
         now, observed_at = self.clock(), utc()
@@ -393,7 +400,7 @@ class Service:
                 started = self.clock()
                 with self._monitor_evidence(session):
                     self._poll(session, index)
-                index = (index + 1) % max(1, len(self.sensors))
+                index = (index + 1) % max(1, len(self.poll_order))
                 next_poll = (max(self.clock() + self.interval, started + self.waveform_every)
                              if self.source == "waveform" else self.clock() + self.interval)
             else:
@@ -510,12 +517,29 @@ class LocalServer(ThreadingHTTPServer):
 
     def __init__(self, service, token, port=0):
         self.service, self.token = service, token
+        self.clients = BoundedSemaphore(16)
         super().__init__(("127.0.0.1", port), LocalHandler)
 
     def get_request(self):
         sock, address = super().get_request()
         sock.settimeout(5)
         return sock, address
+
+    def process_request(self, request, address):
+        if not self.clients.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except BaseException:
+            self.clients.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self.clients.release()
 
 
 class LocalHandler(BaseHTTPRequestHandler):
@@ -597,7 +621,7 @@ class LocalHandler(BaseHTTPRequestHandler):
             if job is not None and parts[3] == "artifacts":
                 match = dw.artifact_map(job).get(parts[4])
                 if match:
-                    name, descriptor = match
+                    name, _ = match
                     return self._artifact(parts[2], name, job["result"]["artifacts"][name],
                                           "application/octet-stream")
         return self._error(404, "not_found", "Resource not found")
@@ -654,8 +678,9 @@ class LocalHandler(BaseHTTPRequestHandler):
             if self.path == prefix + "/shutdown":
                 if payload != {}:
                     raise ValueError("Shutdown expects an empty JSON object")
-                svc.shutdown()
-                return self._json(202, {"state": "stopping" if platform else "STOPPING"})
+                with svc.changed:
+                    svc.shutdown()
+                    return self._json(202, {"state": "stopping" if platform else "STOPPING"})
             if platform:
                 request, budget = dw.submission(payload, parse_job)
                 job = svc.submit(request, budget=budget)
@@ -705,6 +730,7 @@ def main(argv=None):
     parser.add_argument("--instrument-id", default="hantek-dso5102p", help="Stable local instrument identifier")
     parser.add_argument("--physical-probes", choices=("10,1",), help="Operator-confirmed fixture probe factors")
     parser.add_argument("--configured-slots-only", action="store_true", help="Skip S22 items absent from S81 slots")
+    parser.add_argument("--priority", default="", help="Comma-separated S22 items to prefer within each rotation")
     parser.add_argument("--detailed-monitor-log", action="store_true", help="Retain every monitor exchange")
     args = parser.parse_args(argv)
     if sys.platform != "win32":
@@ -715,6 +741,9 @@ def main(argv=None):
         parser.error("Choose unique measurement names from " + ", ".join(allowed))
     if args.telemetry_source == "both" and not set(selection) & ITEMS.keys():
         parser.error("Combined telemetry requires at least one S22 measurement")
+    priority = args.priority.split(",") if args.priority else []
+    if not set(priority) <= set(selection) & ITEMS.keys():
+        parser.error("Prioritize only selected S22 measurement names")
     if not .25 <= args.poll_interval <= 60 or not 1 <= args.stale_after <= 600 or not 0 <= args.port <= 65535:
         parser.error("Invalid interval, stale-age threshold, or port")
     if ((args.settings_every is not None and not 1 <= args.settings_every <= 600)
@@ -734,7 +763,8 @@ def main(argv=None):
                   settings_every=settings_every, waveform_every=args.waveform_every,
                   instrument_id=args.instrument_id, rapid_reads=args.timing == "validated-quiet",
                   physical_probes={"CH1": 10, "CH2": 1} if args.physical_probes else None,
-                  detailed=args.detailed_monitor_log, configured_slots_only=args.configured_slots_only)
+                  detailed=args.detailed_monitor_log, configured_slots_only=args.configured_slots_only,
+                  priority=priority)
     token = secrets.token_urlsafe(32)
     with LocalServer(svc, token, args.port) as server:
         write_discovery(folder / "client.json", {"endpoint": f"http://127.0.0.1:{server.server_port}", "token": token})
