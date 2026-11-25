@@ -2,7 +2,8 @@ import unittest
 from unittest.mock import Mock
 
 from hantek_dso5k._acq11 import (
-    RUN_STOP, SINGLE, _fixture_evidence, _scope_volts, analyze, describe, patch_settings, workflow,
+    RUN_STOP, SINGLE, _fixture_evidence, _scope_volts, analyze, describe, parse_listing, patch_settings,
+    read_frozen_csv, workflow,
 )
 
 
@@ -87,3 +88,23 @@ class WorkbenchAcquisitionTests(unittest.TestCase):
             workflow(link, "running", {})
         self.assertEqual(link.set_fields.call_count, 1)
         self.assertEqual(link.key.call_count, 1)
+
+    def test_frozen_csv_preserves_count_and_analyzes_only_nominal_samples(self):
+        lines = ["#timebase=200000000(ps)", ",#voltbase=1000000(uV)", "#size=4164"]
+        lines += [f"{(i + 1) * 1e-6:.10f},{5000 if i % 1000 >= 500 else 0}" for i in range(4000)]
+        lines += [f"{(i + 1) * 1e-6:.10f},-9000" for i in range(4000, 4164)]
+        raw = "\n".join(lines).encode()
+        result = read_frozen_csv(raw)
+        self.assertEqual(result["exported_samples"], 4164)
+        self.assertEqual(result["samples"], 4000)
+        self.assertEqual(result["vpp_v"], 5)
+        self.assertAlmostEqual(result["frequency_hz"], 1000)
+        with self.assertRaises(RuntimeError):
+            read_frozen_csv(raw.replace(b"4164", b"4301", 1))
+
+    def test_frozen_listing_refuses_unrelated_and_duplicate_entries(self):
+        line = b"-rw-r--r-- 1 root root 89000 Nov 24 12:00 /mnt/udisk/WaveData163.csv"
+        self.assertEqual(parse_listing(line), {"WaveData163.csv": 89000})
+        for listing in (line + b"\n" + line, line.replace(b"WaveData163", b"other")):
+            with self.subTest(listing=listing), self.assertRaises(RuntimeError):
+                parse_listing(listing)

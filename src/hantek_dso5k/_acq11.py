@@ -1,15 +1,18 @@
 """Authorized Workbench acquisition for the retained DSO5102P probe fixture."""
 
 import argparse
+from hashlib import sha256
 import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 from time import perf_counter
 from uuid import uuid4
 
-from ._framing import STATUS, frame, read_frames
+from ._file_replay import MAX_FILE_BYTES, csv_request, decode_file_reply
+from ._framing import STATUS, checksum_valid, frame, read_frames
 from ._host import assess_host, finalization_guard, host_snapshot, lease, require_no_finalization
 from ._native_finalization import create_record, prepare, publish
 from ._pair_windows import _claim_pair, _source_commit
@@ -28,6 +31,8 @@ TIMEBASE = tuple(round(m * 10. ** e, 12) for e in range(-9, 2)
 WRITABLE = {1: (1, 12), 5: (0, 3), 11: (1, 12), 15: (0, 3)}
 RUN_STOP, SINGLE = 19, 18
 COUNTS_PER_DIVISION = 25.0
+CSV_DIR = b"ls -l /mnt/udisk/WaveData*.csv 2>/dev/null"
+CSV_LINE = re.compile(r"^-\S{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+.+?\s+/mnt/udisk/(WaveData\d{1,8}\.csv)$")
 
 
 def describe(raw):
@@ -72,9 +77,7 @@ def patch_settings(raw, edits):
     return bytes(modified)
 
 
-def analyze(samples, *, bncvdiv, probe, offset, interval):
-    """Report display-code derived voltage and edge statistics on a relative time axis."""
-    values = [(sample - offset) * bncvdiv * probe / COUNTS_PER_DIVISION for sample in samples]
+def _quantify(values, interval):
     low, high = min(values), max(values)
     limit = (low + high) / 2
     rising, falling = [], []
@@ -87,14 +90,81 @@ def analyze(samples, *, bncvdiv, probe, offset, interval):
     periods = [b - a for a, b in cycles]
     period = sum(periods) / len(periods) if periods else None
     duties = [(f - a) / (b - a) for a, b in cycles for f in falling if a < f < b]
-    return values, {
-        "samples": len(samples), "interval_s": interval, "min_v": low, "max_v": high,
-        "mean_v": sum(values) / len(values), "vpp_v": high - low, "bnc_vpp_v": (high - low) / probe,
+    return {
+        "samples": len(values), "interval_s": interval, "min_v": low, "max_v": high,
+        "mean_v": sum(values) / len(values), "vpp_v": high - low,
         "period_s": period, "frequency_hz": 1 / period if period else None,
         "duty_cycle": sum(duties) / len(duties) if duties else None,
         "rising_edges_s": rising, "falling_edges_s": falling,
-        "clipped": min(samples) <= -127 or max(samples) >= 127,
     }
+
+
+def analyze(samples, *, bncvdiv, probe, offset, interval):
+    """Report display-code derived voltage and edge statistics on a relative time axis."""
+    values = [(sample - offset) * bncvdiv * probe / COUNTS_PER_DIVISION for sample in samples]
+    metrics = _quantify(values, interval)
+    metrics.update(bnc_vpp_v=metrics["vpp_v"] / probe, clipped=min(samples) <= -127 or max(samples) >= 127)
+    return values, metrics
+
+
+def _listing_frames(raw):
+    """A single fixed C11 exchange, with strict C91 framing and exact S92 separation."""
+    offset = 0
+    while offset < len(raw):
+        if raw.startswith(STATUS, offset):
+            yield offset, 0x92, STATUS[4:-1]
+            offset += len(STATUS)
+            continue
+        header = raw[offset:offset + 4]
+        size = int.from_bytes(header[1:3], "little") + 3
+        reply = raw[offset:offset + size]
+        if (len(header) != 4 or header[0] != 0x43 or size < 5
+                or len(reply) != size or not checksum_valid(reply)):
+            raise RuntimeError("Invalid fixed-directory response framing")
+        yield offset, header[3], reply[4:-1]
+        offset += size
+
+
+def parse_listing(payload):
+    files = {}
+    for line in payload.rstrip(b"\x00").decode("ascii").splitlines():
+        matched = CSV_LINE.fullmatch(line.strip())
+        if not matched:
+            raise RuntimeError("Unexpected frozen-CSV directory entry")
+        count, name = matched.groups()
+        if name in files:
+            raise RuntimeError("Duplicate listed filename")
+        files[name] = int(count)
+    return files
+
+
+def read_frozen_csv(content):
+    lines = content.decode("ascii").splitlines()
+    fields = {}
+    times, values = [], []
+    for line in lines:
+        line = line.strip().lstrip(",")
+        if line.startswith("#"):
+            key, value = line[1:].split("=", 1)
+            if key in fields:
+                raise RuntimeError("Duplicate frozen CSV header")
+            fields[key] = value
+        elif line:
+            t, v = map(float, line.split(","))
+            if not math.isfinite(t) or not math.isfinite(v) or (times and t <= times[-1]):
+                raise RuntimeError("Invalid frozen CSV sample")
+            times.append(t)
+            values.append(v / 1000)
+    if not 4000 <= len(times) <= 4300 or int(fields["size"]) != len(times):
+        raise RuntimeError("Frozen CSV outside the reviewed 4K record count")
+    interval = (times[3999] - times[0]) / 3999
+    if any(not math.isclose(b - a, interval, rel_tol=.015) for a, b in zip(times[:3999], times[1:4000])):
+        raise RuntimeError("Frozen CSV time axis inconsistent")
+    # Preserve the complete original file. Statistics exclude firmware tail/padding.
+    result = _quantify(values[:4000], interval)
+    result.update(exported_samples=len(times), timebase_header=fields["timebase"],
+                  voltbase_header=fields["voltbase"], source_voltage="device-reported mV converted to V")
+    return result
 
 
 class Session:
@@ -115,7 +185,7 @@ class Session:
             observe_qualification_guard(self.link, self.clock, stream, self.log, report)
         self.settled = report["complete"]
 
-    def exchange(self, name, request, opcode, *, duration=1.1, limit=1024, waveform=False):
+    def exchange(self, name, request, opcode, *, duration=1.1, limit=1024, waveform=False, file_bytes=None):
         if not self.settled:
             raise RuntimeError("Previous command has unresolved history")
         stem = self.evidence / f"{self.count + 1:03d}-{name}"
@@ -143,21 +213,30 @@ class Session:
                 last_byte = completed
         raw = stem.with_suffix(".rx").read_bytes()
         primary, statuses = [], []
-        for offset, kind, body in read_frames([raw]):
+        frames = _listing_frames(raw) if request[0] == 0x43 else read_frames([raw])
+        primary_wire = bytearray()
+        for offset, kind, body in frames:
             if kind == 0x92 and body == STATUS[4:-1]:
                 statuses.append(offset)
             elif kind == opcode:
                 primary.append(body)
+                if file_bytes is not None:
+                    primary_wire.extend(raw[offset:offset + len(body) + 5])
             else:
                 raise RuntimeError(f"{name} received unexpected opcode or S92 shape at {offset}")
         if deadline - last_byte < 0.55:
             raise RuntimeError(f"{name} lacked a 550 ms quiet response tail")
         if waveform:
             decode_native_waveform([raw], selector=4)
+        elif file_bytes is not None:
+            content = b"".join(body[1:] for body in primary if body[:1] == b"\x01")
+            content, _ = decode_file_reply(bytes(primary_wire), file_bytes, sha256(content).hexdigest())
         elif len(primary) != 1:
             raise RuntimeError(f"{name} expected exactly one primary response")
         self.log("settled_response", command=name, status_offsets=statuses, primary_frames=len(primary))
         self.settled = True
+        if file_bytes is not None:
+            return content
         return raw if waveform else primary[0]
 
     def settings(self, name):
@@ -180,9 +259,9 @@ class Session:
         return observed
 
     def key(self, name, key):
-        if key not in (RUN_STOP, SINGLE):
-            raise ValueError("Only the Run/Stop and SINGLE keys are enabled")
-        ack = self.exchange(name, frame(0x13, bytes([key, 1])), 0x93, duration=1.4)
+        if key not in (RUN_STOP, SINGLE, 1, 2):
+            raise ValueError("Key is outside the fixture allowlist")
+        ack = self.exchange(name, frame(0x13, bytes([key, 1])), 0x93, duration=2.5 if key == 2 else 1.4)
         if len(ack) != 1:
             raise RuntimeError("Unexpected S93 acknowledgment shape")
 
@@ -191,6 +270,59 @@ class Session:
         if len(body) > 32:
             raise RuntimeError("Measurement response exceeds display-text size")
         return body.rstrip(b"\x00").decode("ascii")
+
+    def list_csv(self, name):
+        sample = frame(0x11, CSV_DIR)
+        request = b"C" + sample[1:-1] + bytes([(sample[-1] - 16) & 255])
+        return parse_listing(self.exchange(name, request, 0x91, duration=2.0, limit=16384))
+
+    def frozen(self, snapshot):
+        if _running(snapshot) or snapshot[206:208] != b"\x30\x01" or snapshot[188] != 0:
+            raise RuntimeError("Frozen fallback requires stopped 4K acquisition and the visible CSV menu")
+        known = self.list_csv("csv_baseline")
+        if not known:
+            raise RuntimeError("No established mounted CSV directory")
+        result = {}
+        toggled = False
+        try:
+            for index in (1, 2):
+                if index == 2:
+                    self.key("csv_other_source", 1)
+                    toggled = True
+                for attempt in (1, 2):
+                    self.key(f"csv_save_{index}_{attempt}", 2)
+                    current = self.settings(f"csv_state_{index}_{attempt}")
+                    if _running(current) or current[206:208] != b"\x30\x01":
+                        raise RuntimeError("CSV controls left the frozen menu or resumed acquisition")
+                    listing = self.list_csv(f"csv_scan_{index}_{attempt}")
+                    if any(listing.get(name) != count for name, count in known.items()):
+                        raise RuntimeError("A previously listed CSV changed")
+                    names = set(listing) - set(known)
+                    if names:
+                        break
+                if len(names) != 1:
+                    raise RuntimeError("Expected one uniquely new CSV after the bounded save actions")
+                name = names.pop()
+                stable = self.list_csv(f"csv_stable_{index}")
+                count = listing[name]
+                if stable != listing or not 1 <= count <= MAX_FILE_BYTES:
+                    raise RuntimeError("New CSV did not settle within the byte bound")
+                content = self.exchange(f"csv_download_{index}", csv_request(name), 0x90, duration=4.,
+                                        limit=100 * 1024, file_bytes=count)
+                with (self.evidence / name).open("xb") as output:
+                    output.write(content)
+                metrics = read_frozen_csv(content)
+                metrics.update(filename=name, bytes=count, sha256=sha256(content).hexdigest())
+                expected = {200000: "CH1", 2000000: "CH1", 1000000: "CH2"}
+                channel = expected.get(int(metrics["voltbase_header"].split("(")[0]))
+                if channel is None or channel in result:
+                    raise RuntimeError("CSV voltage-base header does not uniquely identify the source slot")
+                result[channel] = metrics
+                known = listing
+        finally:
+            if toggled and self.settled:
+                self.key("csv_restore_source", 1)
+        return result
 
     def capture(self, name, snapshot):
         raw = self.exchange(name, frame(2, b"\x01\x04"), 0x82, duration=3., limit=32768, waveform=True)
@@ -288,19 +420,26 @@ def workflow(session, mode, outcome):
             outcome["ch1_vpp_crosscheck"] = math.isclose(native_vpp, scope_vpp, rel_tol=0.15)
         else:
             outcome["ch1_vpp_crosscheck"] = False
-        if mode == "full":
+        if mode in ("full", "frozen"):
             session.key("arm_single", SINGLE)
             for attempt in range(1, 5):
                 stopped = session.settings(f"single_state_{attempt}")
                 if not _running(stopped):
                     outcome["single_stop_observed"] = True
-                    outcome["single"] = session.capture("single_waveform", stopped)
-                    outcome["single_validation"] = _fixture_evidence(outcome["single"])
+                    if mode == "full":
+                        outcome["single"] = session.capture("single_waveform", stopped)
+                        outcome["single_validation"] = _fixture_evidence(outcome["single"])
+                    if not outcome.get("single_validation", {}).get("periodic_pair"):
+                        outcome["single_frozen"] = session.frozen(stopped)
+                        if not all(750 <= (ch["frequency_hz"] or 0) <= 1250
+                                   for ch in outcome["single_frozen"].values()):
+                            raise RuntimeError("Frozen CSV captures do not match fixture periodicity")
                     break
-            if not outcome.get("single") or not _periodic_pair(outcome["single"]):
+            if not (outcome.get("single_frozen") or outcome.get("single_validation", {}).get("periodic_pair")):
                 raise RuntimeError("SINGLE stopped waveform unavailable or failed periodicity checks")
         if not outcome["running_validation"]["probe_assignment_plausible"] or (
-                mode == "full" and not outcome["single_validation"]["probe_assignment_plausible"]):
+                outcome.get("single_validation", {}).get("periodic_pair")
+                and not outcome["single_validation"]["probe_assignment_plausible"]):
             raise RuntimeError("Measured channel ratio does not support the expected probe assignment")
     finally:
         if changed and session.settled:
@@ -380,7 +519,7 @@ def run(evidence, source, mode, *, hold, claim, screen, marker):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("state", "running", "full"))
+    parser.add_argument("mode", choices=("state", "running", "full", "frozen"))
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--authorization", choices=("ACQ-11",), required=True)
     args = parser.parse_args(argv)
