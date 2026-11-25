@@ -1,5 +1,7 @@
 """Supervised DSO5102P external event profiles for the retained 208-byte layout."""
 
+from hashlib import sha256
+
 from ._acq11 import RUN_STOP, _running, describe
 from ._framing import frame
 from ._qualification import SCREEN, WINDOW
@@ -18,6 +20,7 @@ DIAGNOSTIC = {**ANALOG, 21: b"\x00", 22: b"\x00", 23: b"\x00", 24: b"\x00", 59: 
 # Retained firmware normalized a Normal-mode S11 write to mode 0 while
 # stopped. Arm behavior in this mode must be demonstrated by the display.
 EXTERNAL = {**DIAGNOSTIC, 22: b"\x02", 25: b"\x0c\x00"}
+CSV_FILE_LIST = "4a1036b27b37dd88037401a3116ad63bb27fa4e42a60fb9bd12080514f0f6f92"
 
 
 def set_timebase(session, current, target):
@@ -34,6 +37,26 @@ def set_timebase(session, current, target):
             raise RuntimeError("SEC/DIV key did not advance the reviewed timebase by one step")
         current = observed
     return current
+
+
+def restore_panel(session, original, outcome):
+    """Restore only the two panel fields changed during the supervised investigation."""
+    current = session.settings("acq12_before_original_restore")
+    fields = compare_settings(original, current)["configuration_or_unclassified_changes"]
+    if _running(original) or _running(current) or any(
+            change["field"] not in ("field_160", "field_207") for change in fields):
+        raise RuntimeError("Original scope restoration encountered an unreviewed difference")
+    current = set_timebase(session, current, original[160])
+    if current[207] != original[207]:
+        ack = session.exchange("acq12_restore_menu_visibility", frame(0x13, b"\x00\x01"), 0x93, duration=1.4)
+        if len(ack) != 1:
+            raise RuntimeError("Menu visibility key failed")
+    final = session.settings("acq12_original_restored")
+    difference = compare_settings(original, final)
+    outcome.update(restored=describe(final), restoration_comparison=difference,
+                   restoration_verified=not difference["configuration_or_unclassified_changes"] and not _running(final))
+    if not outcome["restoration_verified"]:
+        raise RuntimeError("Original scope settings did not reconcile")
 
 
 def patch_profile(raw, edits):
@@ -111,5 +134,21 @@ def screen_status(session, name):
     session.settled = True
     source = folder / (stem + ".rgb565")
     render(source, folder / (stem + ".png"))
-    result["status_pixels"] = region(source.read_bytes(), REGIONS["trigger_status"][1])
+    data = source.read_bytes()
+    result["trigger_status_sha256"] = sha256(region(data, REGIONS["trigger_status"][1])).hexdigest()
+    result["file_list_sha256"] = sha256(region(data, (136, 64, 532, 88))).hexdigest()
     return result
+
+
+def close_frozen_file_list(session, stopped, display):
+    if display["file_list_sha256"] != CSV_FILE_LIST:
+        return False
+    if display["aggregate"] != "PASS" or _running(stopped) or stopped[206:208] != b"\x30\x01":
+        raise RuntimeError("File List dismissal requires an intact stopped CSV display")
+    ack = session.exchange("acq12_close_csv_file_list", frame(0x13, b"\x05\x01"), 0x93, duration=1.4)
+    if len(ack) != 1:
+        raise RuntimeError("The CSV File List soft key did not acknowledge")
+    current = session.settings("acq12_after_csv_file_list")
+    if _running(current) or current[206:208] != b"\x30\x01":
+        raise RuntimeError("File List control left the stopped CSV profile")
+    return True

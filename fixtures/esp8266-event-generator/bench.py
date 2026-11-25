@@ -1,7 +1,6 @@
 """Run the ACQ-12 bench fixture with the existing Hantek lease and evidence journal."""
 
 import argparse
-from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -11,7 +10,10 @@ from time import monotonic, sleep
 
 from fixture import command, inspect_capture, open_fixture
 from hantek_dso5k._acq11 import RUN_STOP, SINGLE, _running, describe, run
-from hantek_dso5k._acq12 import DIAGNOSTIC, EXTERNAL, apply_profile, restore, screen_status, set_timebase
+from hantek_dso5k._acq12 import (
+    DIAGNOSTIC, EXTERNAL, apply_profile, close_frozen_file_list, restore, restore_panel, screen_status, set_timebase,
+)
+from hantek_dso5k._framing import read_frames
 from hantek_dso5k._host import assess_host, host_snapshot, lease
 from hantek_dso5k._native_finalization import create_record
 from hantek_dso5k._retrieve import file_record
@@ -98,7 +100,7 @@ def external(session, outcome, device, event_ids, ready_digest, path, *, baselin
             row["arming_requested"] = True
             first = session.settings("acq12_after_single")
             display = screen_status(session, "acq12_arm_display")
-            digest = sha256(display.pop("status_pixels")).hexdigest()
+            digest = display["trigger_status_sha256"]
             row["display"] = display
             row["display_trigger_status_sha256"] = digest
             second = session.settings("acq12_after_arm_display")
@@ -142,6 +144,8 @@ def external(session, outcome, device, event_ids, ready_digest, path, *, baselin
                 row["frozen_decoded"] = decoded = inspect_capture(csv_capture, event_id)
                 accepted = set(decoded) == {"CH1", "CH2"} and all(ch["accepted"] for ch in decoded.values())
                 row["retrieval_method"] = "frozen_csv"
+                recovery_screen = screen_status(session, "acq12_after_frozen_csv_display")
+                row["file_list_close_requested"] = close_frozen_file_list(session, frozen, recovery_screen)
             else:
                 row["retrieval_method"] = "native_s02"
             row["outcome"] = "common_event" if accepted else "unproven_waveform"
@@ -211,10 +215,12 @@ def serve(argv):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True)
-    parser.add_argument("--mode", choices=["diagnostic", "external"], default="diagnostic")
+    parser.add_argument("--mode", choices=["diagnostic", "external", "restore-panel"], default="diagnostic")
     parser.add_argument("--event", action="append", default=[], type=int)
     parser.add_argument("--ready-digest")
     parser.add_argument("--path", choices=["auto", "native", "frozen"], default="auto")
+    parser.add_argument("--original-settings-rx", type=Path)
+    parser.add_argument("--contrast", action="store_true", help="8 ms/div, 144 mV EXT and swapped vertical scales")
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--overwrite-stopped", action="store_true", required=True)
     args = parser.parse_args()
@@ -224,14 +230,31 @@ def main():
         parser.error("diagnostic requires one event ID")
     if args.mode == "external" and args.event and not args.ready_digest:
         parser.error("external stimulation requires an independently observed ready screen digest")
+    if (args.mode == "restore-panel") != (args.original_settings_rx is not None):
+        parser.error("restore-panel requires the original settings exchange")
+    if args.contrast and args.mode != "external":
+        parser.error("contrast applies only to an external trial")
     source = os.environ["HANTEK_ACQ12_SOURCE"]
     _source_commit(source)
     with open_fixture(args.port) as device:
         def execute(session, mode, outcome):
             if mode == "diagnostic":
                 diagnostic(session, outcome, device, args.event[0])
+            elif mode == "restore-panel":
+                observed = [body for _, opcode, body in read_frames([args.original_settings_rx.read_bytes()])
+                            if opcode == 0x81 and len(body) == 208]
+                if len(observed) != 1:
+                    raise RuntimeError("Original evidence must hold one complete S81 settings reply")
+                outcome["terminal_fixture"] = confirm_idle(device)
+                restore_panel(session, observed[0], outcome)
             else:
-                external(session, outcome, device, args.event, args.ready_digest, args.path)
+                profile, timebase = EXTERNAL, 19
+                if args.contrast:
+                    profile = {**EXTERNAL, 1: EXTERNAL[11], 11: EXTERNAL[1],
+                               8: EXTERNAL[18], 18: EXTERNAL[8], 25: b"\x12\x00"}
+                    timebase = 20
+                external(session, outcome, device, args.event, args.ready_digest, args.path,
+                         profile=profile, timebase=timebase)
 
         result = run(
             args.evidence, source, args.mode, hold=lease, claim=_claim_pair,
