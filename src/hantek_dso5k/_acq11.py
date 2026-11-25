@@ -1,6 +1,7 @@
 """Authorized Workbench acquisition for the retained DSO5102P probe fixture."""
 
 import argparse
+from contextlib import contextmanager
 from hashlib import sha256
 import json
 import math
@@ -182,6 +183,17 @@ class Session:
         self.count = 0
         self.settled = True
         self.last_timing = None
+        self.last_receive = None
+        self.rapid_reads = False
+        self.job_check = None
+
+    @contextmanager
+    def recovery(self):
+        check, self.job_check = self.job_check, None
+        try:
+            yield
+        finally:
+            self.job_check = check
 
     def log(self, event, **fields):
         self.journal.write(json.dumps({"event": event, "utc": utc(), "monotonic": self.clock(),
@@ -198,35 +210,49 @@ class Session:
     def exchange(self, name, request, opcode, *, duration=1.1, limit=1024, waveform=False, file_bytes=None):
         if not self.settled:
             raise RuntimeError("Previous command has unresolved history")
+        if self.job_check is not None:
+            self.job_check()
+        terminal_quiet = self.rapid_reads and request[0] == 0x53 and request[3] in (1, 2, 0x22)
         stem = self.evidence / f"{self.count + 1:03d}-{name}"
         stem.with_suffix(".tx").write_bytes(request)
         self.count += 1
         self.settled = False
         self.last_timing = None
+        self.last_receive = None
         self.log("write_attempt", command=name, bytes=request.hex(" "))
         with stem.with_suffix(".rx").open("xb") as stream:
             written = self.link.write(request)
             started = self.clock()
             write_time = {"utc": utc(), "monotonic_s": started}
             first_time = None
+            last_time = None
             self.log("write_completed", command=name, bytes=written, completed=started)
             if written != len(request):
                 raise RuntimeError(f"Short {name} write")
             deadline = started + duration
             last_byte = started
+            received_wire = bytearray()
+            complete = False
             while (now := self.clock()) < deadline:
+                stop_at = min(deadline, last_byte + .55) if complete else deadline
+                if now >= stop_at:
+                    break
                 try:
-                    received = self.link.read(16384, timeout_ms=max(1, min(250, math.ceil((deadline - now) * 1000))))
+                    received = self.link.read(16384, timeout_ms=max(1, min(250, math.ceil((stop_at - now) * 1000))))
                 except TimeoutError:
                     continue
                 completed = self.clock()
                 if first_time is None:
                     first_time = {"utc": utc(), "monotonic_s": completed}
+                last_time = {"utc": utc(), "monotonic_s": completed}
                 stream.write(received)
                 self.log("receive", command=name, bytes=len(received), completed=completed)
                 if not received or stream.tell() > limit or completed > deadline:
                     raise RuntimeError(f"{name} receive bound exceeded")
                 last_byte = completed
+                if terminal_quiet:
+                    received_wire.extend(received)
+                    complete = self._complete_read(received_wire, opcode, waveform)
         raw = stem.with_suffix(".rx").read_bytes()
         primary, statuses = [], []
         frames = _listing_frames(raw) if request[0] == 0x43 else read_frames([raw])
@@ -240,7 +266,8 @@ class Session:
                     primary_wire.extend(raw[offset:offset + len(body) + 5])
             else:
                 raise RuntimeError(f"{name} received unexpected opcode or S92 shape at {offset}")
-        if deadline - last_byte < 0.55:
+        quiet = min(self.clock(), deadline) - last_byte if terminal_quiet else deadline - last_byte
+        if quiet < .55:
             raise RuntimeError(f"{name} lacked a 550 ms quiet response tail")
         if waveform:
             decode_native_waveform([raw], selector=4)
@@ -251,14 +278,27 @@ class Session:
             raise RuntimeError(f"{name} expected exactly one primary response")
         self.log("settled_response", command=name, status_offsets=statuses, primary_frames=len(primary),
                  write_to_last_byte_s=last_byte - started, observation_s=self.clock() - started,
-                 quiet_tail_s=deadline - last_byte)
+                 quiet_tail_s=quiet)
         self.last_timing = {"clock_context": "Windows/Python perf_counter; host UTC",
                             "request_write": write_time, "receive_first": first_time,
                             "receive_end": {"utc": utc(), "monotonic_s": self.clock()}}
+        self.last_receive = last_time
         self.settled = True
         if file_bytes is not None:
             return content
         return raw if waveform else primary[0]
+
+    @staticmethod
+    def _complete_read(wire, opcode, waveform):
+        try:
+            if waveform:
+                decode_native_waveform([bytes(wire)], selector=4)
+                return True
+            primary = [body for _, kind, body in read_frames([wire])
+                       if (kind, body) != (0x92, STATUS[4:-1]) and kind == opcode]
+            return len(primary) == 1 and (len(primary[0]) == 208 if opcode == 0x81 else len(primary[0]) <= 32)
+        except ValueError:
+            return False
 
     def settings(self, name):
         data = self.exchange(name, frame(1), 0x81)
@@ -277,6 +317,20 @@ class Session:
         observed = self.settings(name + "_readback")
         if any(observed[offset] != value for offset, value in edits.items()):
             raise RuntimeError(f"{name} settings readback differs from requested fields")
+        return observed
+
+    def set_measurement_slots(self, name, current, slots):
+        """Apply only the measurement table of a fresh, retained settings block."""
+        if len(slots) != 16 or any(source not in (0, 1) or item > 32
+                                   for source, item in zip(slots[::2], slots[1::2])):
+            raise ValueError("Unsupported retained analog measurement table")
+        if current[189:205] == slots:
+            return current
+        payload = current[:189] + slots + current[205:]
+        response = self.exchange(name, frame(0x11, payload), 0x91, duration=1.8)
+        observed = self.settings(name + "_readback")
+        if response != b"\x00" or compare_settings(payload, observed)["configuration_or_unclassified_changes"]:
+            raise RuntimeError("Measurement table write or complete configuration readback differs")
         return observed
 
     def key(self, name, key):
@@ -301,13 +355,13 @@ class Session:
         request = b"C" + sample[1:-1] + bytes([(sample[-1] - 16) & 255])
         return parse_listing(self.exchange(name, request, 0x91, duration=2.0, limit=16384))
 
-    def frozen(self, snapshot):
+    def frozen(self, snapshot, *, preserved=None):
         if _running(snapshot) or snapshot[206:208] != b"\x30\x01" or snapshot[188] != 0:
             raise RuntimeError("Frozen fallback requires stopped 4K acquisition and the visible CSV menu")
         known = self.list_csv("csv_baseline")
         if not known:
             raise RuntimeError("No established mounted CSV directory")
-        result = {}
+        result = {} if preserved is None else preserved
         scales = describe(snapshot)["channels"]
         expected = {round(v["bnc_v_per_div"] * v["software_probe"] * 1e6): ch for ch, v in scales.items()}
         if len(expected) != 2:
@@ -353,10 +407,11 @@ class Session:
                 known = listing
         finally:
             if toggled and self.settled:
-                menu = self.settings("csv_before_source_restore")
-                if _running(menu) or menu[206:208] != b"\x30\x01":
-                    raise RuntimeError("Cannot restore the CSV selection in an unexpected panel state")
-                self.key("csv_restore_source", 1)
+                with self.recovery():
+                    menu = self.settings("csv_before_source_restore")
+                    if _running(menu) or menu[206:208] != b"\x30\x01":
+                        raise RuntimeError("Cannot restore the CSV selection in an unexpected panel state")
+                    self.key("csv_restore_source", 1)
         return result
 
     def capture(self, name, snapshot):

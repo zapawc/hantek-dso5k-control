@@ -1,5 +1,7 @@
 # TEL-SVC-01 local instrument service
 
+The service also supports the [Digital Workbench profile and responsive telemetry](WORKBENCH_SERVICE.md). The original client and routes below use the same service process and device worker.
+
 The service owns the retained DSO5102P rear interface on one Windows worker. It uses the existing cooperative mutex, WinUSB validation, interruption marker and guarded finalization. The HTTP threads only read memory or queue an operation. They never open the scope. An unresolved command or unverifiable restore stops USB work, releases resources where possible and keeps the interruption record for review. Firmware 3.40.0 (151009.0) and the authorized Workbench fixture are the supported profile. [ADR-005](../adr/0005-proportionate-instrument-qualification.md) · [ADR-006](../adr/0006-workbench-acquisition-development.md)
 
 ## Start and use

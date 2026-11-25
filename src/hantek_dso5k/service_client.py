@@ -14,7 +14,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class Client:
-    def __init__(self, config):
+    def __init__(self, config, *, profile=False):
         settings = json.loads(Path(config).read_bytes())
         endpoint = urlsplit(settings["endpoint"])
         if (endpoint.scheme != "http" or endpoint.hostname != "127.0.0.1" or endpoint.port is None
@@ -22,11 +22,12 @@ class Client:
                 or endpoint.fragment):
             raise ValueError("Client configuration must identify the local IPv4 loopback service")
         self.endpoint = settings["endpoint"]
+        self.prefix = "/dw/v0.1/" if profile else "/v1/"
         self.headers = {"Authorization": "Bearer " + settings["token"], "Content-Type": "application/json"}
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
 
     def request(self, route, payload=None):
-        request = Request(self.endpoint + "/v1/" + route,
+        request = Request(self.endpoint + self.prefix + route,
                           data=None if payload is None else json.dumps(payload).encode(),
                           headers=self.headers)
         with self.opener.open(request, timeout=10) as response:
@@ -45,6 +46,7 @@ def main(argv=None):
     parser.add_argument("--path", choices=("auto", "native", "frozen"), default="auto")
     parser.add_argument("--allow-overwrite", action="store_true")
     parser.add_argument("--configure-fixture", action="store_true", help="Explicit S22 comparison with verified fixture edits")
+    parser.add_argument("--configure-slots", action="store_true", help="Explicit temporary CH2 slot comparison")
     parser.add_argument("--job-id")
     parser.add_argument("--artifact")
     parser.add_argument("--output", type=Path)
@@ -58,6 +60,8 @@ def main(argv=None):
                 payload.update(path=args.path, allow_overwrite=args.allow_overwrite)
             elif operation == "s22-probe":
                 payload["configure_fixture"] = args.configure_fixture
+                if args.configure_slots:
+                    payload["configure_slots"] = True
             result = client.json("jobs", payload)
         elif operation in ("run", "stop"):
             result = client.json("jobs", {"kind": "run-state", "running": operation == "run",

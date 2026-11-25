@@ -1,8 +1,9 @@
 """Serialized capture procedures for the service's approved instrument profiles."""
 
+from contextlib import nullcontext
 from hashlib import sha256
 
-from ._acq11 import RUN_STOP, SINGLE, _running, analyze, describe, restore_settings
+from ._acq11 import RUN_STOP, SINGLE, Session, _running, analyze, describe, restore_settings
 from ._native_finalization import create_record
 from ._retrieve import file_record
 from .acquisition import build_native_result
@@ -21,8 +22,8 @@ def instrument():
             "provenance": "operator-declared retained Workbench scope and verified WinUSB interface"}
 
 
-def snapshot(session, raw, job_id):
-    wire = session.native_wire("snapshot")
+def snapshot(session, raw, job_id, *, retain=True, physical_probes=None):
+    wire = session.native_wire("snapshot" if retain else "telemetry_waveform")
     decoded = decode_native_waveform([wire], selector=4)
     cfg = describe(raw)
     cfg["s81_sha256"] = sha256(raw).hexdigest()
@@ -49,19 +50,27 @@ def snapshot(session, raw, job_id):
             "source": "native_waveform", "uses_configured_probe_factor": True,
             **{key: metrics[key] for key in ("min_v", "max_v", "vpp_v", "mean_v",
                                              "frequency_hz", "period_s", "duty_cycle", "clipped")},
+            "sample_count": len(channel.samples), "sample_interval_s": dt,
+            "coverage_s": (len(channel.samples) - 1) * dt,
+            "physical_voltage_verified": (physical_probes is not None
+                                          and scale["software_probe"] == physical_probes[channel.channel]),
         }
-    source = session.evidence / f"{session.count:03d}-snapshot.rx"
     timing = session.last_timing if isinstance(session.last_timing, dict) else None
+    observation = dict(timing, receive_last=session.last_receive) if timing and isinstance(session, Session) else timing
+    summary = {"method": "native_s02", "status_offsets": list(decoded.status_offsets),
+               "availability": {slot.channel: slot.samples is not None for slot in decoded.channels},
+               "derived_measurements": derived, "timing": observation, "acquisition_id": job_id,
+               "same_shot": "UNPROVEN"}
+    if not retain:
+        return summary
+    source = session.evidence / f"{session.count:03d}-snapshot.rx"
     result = build_native_result(
         [wire], selector=4, run_id=job_id, instrument=instrument(), configuration_snapshot=cfg,
         timing=timing,
         artifacts=[{"role": "raw_s82", "locator": source.name, **file_record(source)}],
     )
     create_record(session.evidence / "waveform.json", result)
-    return {"method": "native_s02", "status_offsets": list(decoded.status_offsets),
-            "availability": {slot.channel: slot.samples is not None for slot in decoded.channels},
-            "derived_measurements": derived,
-            "same_shot": "UNPROVEN"}
+    return summary
 
 
 def verify_profile(raw, path):
@@ -98,16 +107,22 @@ def triggered(session, baseline, job_id, request, result, restoration_required):
             result["native"] = native
             if all(native["availability"].get(ch) for ch in ("CH1", "CH2")):
                 result["method"] = "native_s02"
+                result["acquisition_outcome"] = "succeeded"
                 return
             if path == "native":
                 raise Unsupported("Stopped native returned unavailable analog slots")
         if frozen[206:208] != b"\x30\x01":
             raise Unsupported("Stopped native data unavailable and the frozen CSV menu is not selected")
-        result["frozen"] = session.frozen(frozen)
-        result["method"] = "frozen_csv"
+        result["frozen"] = preserved = {}
+        try:
+            session.frozen(frozen, preserved=preserved)
+        finally:
+            if set(preserved) == {"CH1", "CH2"}:
+                result.update(method="frozen_csv", acquisition_outcome="succeeded")
     finally:
         if session.settled:
-            result["restored_raw"] = restore_settings(session, baseline, result)
+            with session.recovery() if isinstance(session, Session) else nullcontext():
+                result["restored_raw"] = restore_settings(session, baseline, result)
             restoration_required(False)
 
 
@@ -131,23 +146,46 @@ def set_run_state(session, baseline, request, result, restoration_required):
 
 def s22_probe(session, baseline, request, result, restoration_required):
     configure = request.get("configure_fixture", False)
-    if configure:
+    slots = request.get("configure_slots", False)
+    if configure or slots:
         verify_profile(baseline, "auto")
         if not _running(baseline):
             raise Unsupported("The configured S22 comparison requires an explicitly running scope")
+        if slots and any(source not in (0, 1) or item > 32
+                         for source, item in describe(baseline)["measurement_slots"]):
+            raise Unsupported("Original table contains entries outside the verified analog slot format")
         restoration_required(True)
+
+    def measurements():
+        return [{"source": source, "mode": mode, "item": item,
+                 "display": session.measurement(item, source, mode=mode)}
+                for mode in (0, 1) for source in (0, 1) for item in ((1, 4, 2) if slots else (1, 4))]
+
     try:
+        configured = baseline
         if configure:
             configured = session.set_fields("probe_fixture_scale", baseline, FIXTURE_EDITS)
             if not _running(configured):
                 raise Unsupported("Scope did not stay running after the fixture edits")
             result["configured"] = describe(configured)
-        result["reads"] = [
-            {"source": source, "mode": mode, "item": item,
-             "display": session.measurement(item, source, mode=mode)}
-            for mode in (0, 1) for source in (0, 1) for item in (1, 4)
-        ]
+        if slots:
+            result["before_slots"] = measurements()
+            configured = session.settings("before_measurement_slots")
+            # Select CH2 frequency and Vpp while retaining available CH1 choices.
+            table = configured[189:201] + bytes((1, 1, 1, 4))
+            configured = session.set_measurement_slots("measurement_slots", configured, table)
+            if not _running(configured):
+                raise Unsupported("Scope did not stay running after measurement-slot changes")
+            result["configured_slots"] = describe(configured)["measurement_slots"]
+        result["reads"] = measurements()
+        if slots:
+            result["native_comparison"] = snapshot(
+                session, configured, session.evidence.name, physical_probes={"CH1": 10, "CH2": 1} if configure else None)
     finally:
-        if configure and session.settled:
-            result["restored_raw"] = restore_settings(session, baseline, result)
+        if (configure or slots) and session.settled:
+            with session.recovery() if isinstance(session, Session) else nullcontext():
+                if slots:
+                    current = session.settings("before_slot_restore")
+                    session.set_measurement_slots("restore_measurement_slots", current, baseline[189:205])
+                result["restored_raw"] = restore_settings(session, baseline, result)
             restoration_required(False)
