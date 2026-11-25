@@ -17,8 +17,8 @@ def settings(state):
 
 def fixture_waveform():
     return {
-        "channels": {"CH1": {"vpp_v": 2.64, "bnc_vpp_v": .264, "frequency_hz": 1000, "clipped": False},
-                     "CH2": {"vpp_v": 2.56, "bnc_vpp_v": 2.56, "frequency_hz": 1000, "clipped": False}},
+        "channels": {"CH1": {"vpp_v": 2.9, "bnc_vpp_v": .29, "frequency_hz": 1000, "clipped": False},
+                     "CH2": {"vpp_v": 2.8, "bnc_vpp_v": 2.8, "frequency_hz": 1000, "clipped": False}},
         "availability": {"CH1": True, "CH2": True, "MATH": False},
     }
 
@@ -28,7 +28,8 @@ class WorkbenchAcquisitionTests(unittest.TestCase):
         original = settings(0)
         updated = patch_settings(original, {11: 9, 15: 0})
         self.assertEqual([i for i, (a, b) in enumerate(zip(original, updated)) if a != b], [11, 15])
-        self.assertEqual(describe(updated)["channels"]["CH2"]["bnc_v_per_div"], 1.)
+        self.assertEqual(describe(updated)["channels"]["CH2"]["bnc_v_per_div"], 2.)
+        self.assertEqual(describe(updated)["channels"]["CH1"]["bnc_v_per_div"], .5)
         self.assertEqual(describe(updated)["channels"]["CH2"]["software_probe"], 1)
         self.assertEqual(describe(updated)["seconds_per_division"], .0002)
         for edits in ({188: 1}, {20: 3}, {11: 13}):
@@ -50,7 +51,7 @@ class WorkbenchAcquisitionTests(unittest.TestCase):
         self.assertTrue(evidence["probe_assignment_plausible"])
         self.assertEqual(evidence["voltage"], "OUTSIDE_NOMINAL_RANGE")
         self.assertEqual(_scope_volts("250mV"), .25)
-        self.assertEqual(_scope_volts("2.64V"), 2.64)
+        self.assertEqual(_scope_volts("2.45V"), 2.45)
         self.assertIsNone(_scope_volts("?"))
 
     def test_full_workflow_preserves_single_before_restore(self):
@@ -108,3 +109,26 @@ class WorkbenchAcquisitionTests(unittest.TestCase):
         for listing in (line + b"\n" + line, line.replace(b"WaveData163", b"other")):
             with self.subTest(listing=listing), self.assertRaises(RuntimeError):
                 parse_listing(listing)
+
+    def test_full_uses_frozen_export_after_explicit_native_unavailable(self):
+        base, stopped = settings(0), settings(5)
+        running = patch_settings(settings(3), {11: 9, 15: 0})
+        link = Mock(settled=True)
+        link.settings.side_effect = {
+            "initial": base, "running": running, "single_state_1": stopped,
+            "before_restore": stopped, "restored": stopped,
+        }.__getitem__
+        link.set_fields.side_effect = [base, stopped]
+        link.measurement.return_value = "?"
+        link.capture.side_effect = [fixture_waveform(), {
+            "channels": {}, "availability": {"CH1": False, "CH2": False, "MATH": False}
+        }]
+        link.frozen.return_value = {"CH1": {"frequency_hz": 1000, "vpp_v": 2.7},
+                                    "CH2": {"frequency_hz": 1000, "vpp_v": 2.8}}
+        result = {}
+        workflow(link, "full", result)
+        link.frozen.assert_called_once_with(stopped)
+        self.assertTrue(result["restoration_verified"])
+        self.assertTrue(all(result["csv_vpp_crosscheck"].values()))
+        steps = [call[0] for call in link.method_calls]
+        self.assertLess(steps.index("frozen"), len(steps) - 2)

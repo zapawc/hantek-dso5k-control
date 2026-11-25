@@ -25,6 +25,9 @@ from .native_waveform import decode_native_waveform
 
 # These S81 indices have been compared with the archived 208-byte layout.
 VOLTS = (.001, .002, .005, .01, .02, .05, .1, .2, .5, 1., 2., 5., 10.)
+# This retained firmware differs from the newer protocol table. The ACQ-11
+# fixture confirmed 7 and 9 against frozen CSV headers and waveform levels.
+RETAINED_VOLTS = {7: .5, 9: 2.}
 PROBES = (1, 10, 100, 1000)
 TIMEBASE = tuple(round(m * 10. ** e, 12) for e in range(-9, 2)
                  for m in (2, 4, 8) if m * 10. ** e <= 40)
@@ -44,7 +47,10 @@ def describe(raw):
             raise ValueError("Unknown voltage-scale or probe index")
         channels[name] = {
             "enabled": raw[start] == 1, "coupling_code": raw[start + 2],
-            "bnc_v_per_div": VOLTS[raw[start + 1]], "software_probe": PROBES[raw[start + 5]],
+            "vertical_scale_index": raw[start + 1],
+            "bnc_v_per_div": RETAINED_VOLTS.get(raw[start + 1]),
+            "external_scale_candidate": VOLTS[raw[start + 1]],
+            "software_probe": PROBES[raw[start + 5]],
             "vertical_position_counts": int.from_bytes(raw[start + 8:start + 10], "little", signed=True),
         }
     if raw[160] >= len(TIMEBASE):
@@ -90,12 +96,15 @@ def _quantify(values, interval):
     periods = [b - a for a, b in cycles]
     period = sum(periods) / len(periods) if periods else None
     duties = [(f - a) / (b - a) for a, b in cycles for f in falling if a < f < b]
+    ordered = sorted(values)
+    lower, upper = ordered[len(ordered) // 5], ordered[4 * len(ordered) // 5]
     return {
         "samples": len(values), "interval_s": interval, "min_v": low, "max_v": high,
         "mean_v": sum(values) / len(values), "vpp_v": high - low,
         "period_s": period, "frequency_hz": 1 / period if period else None,
         "duty_cycle": sum(duties) / len(duties) if duties else None,
         "rising_edges_s": rising, "falling_edges_s": falling,
+        "p20_v": lower, "p80_v": upper, "central_swing_v": upper - lower,
     }
 
 
@@ -283,6 +292,10 @@ class Session:
         if not known:
             raise RuntimeError("No established mounted CSV directory")
         result = {}
+        scales = describe(snapshot)["channels"]
+        expected = {round(v["bnc_v_per_div"] * v["software_probe"] * 1e6): ch for ch, v in scales.items()}
+        if len(expected) != 2:
+            raise RuntimeError("Frozen CSV requires two distinguishable fixture scale headers")
         toggled = False
         try:
             for index in (1, 2):
@@ -313,14 +326,20 @@ class Session:
                     output.write(content)
                 metrics = read_frozen_csv(content)
                 metrics.update(filename=name, bytes=count, sha256=sha256(content).hexdigest())
-                expected = {200000: "CH1", 2000000: "CH1", 1000000: "CH2"}
+                if metrics["timebase_header"] != f"{round(TIMEBASE[snapshot[160]] * 1e12)}(ps)":
+                    raise RuntimeError("Frozen CSV timebase does not match the stopped settings")
                 channel = expected.get(int(metrics["voltbase_header"].split("(")[0]))
+                create_record(self.evidence / f"frozen_{index}_measurements.json",
+                              dict(metrics, attributed_channel=channel))
                 if channel is None or channel in result:
                     raise RuntimeError("CSV voltage-base header does not uniquely identify the source slot")
                 result[channel] = metrics
                 known = listing
         finally:
             if toggled and self.settled:
+                menu = self.settings("csv_before_source_restore")
+                if _running(menu) or menu[206:208] != b"\x30\x01":
+                    raise RuntimeError("Cannot restore the CSV selection in an unexpected panel state")
                 self.key("csv_restore_source", 1)
         return result
 
@@ -347,7 +366,7 @@ class Session:
                    "availability": {c.channel: c.samples is not None for c in result.channels},
                    "channels": channels, "time_origin": "relative sample zero", "same_shot": "UNPROVEN",
                    "counts_per_division": COUNTS_PER_DIVISION,
-                   "scale_provenance": "Documented display-code gain and S81 offset; absolute voltage unverified"}
+                   "scale_provenance": "25 display codes/division and retained fixture S81 scale map from native CSV"}
         create_record(self.evidence / f"{name}.json", capture)
         return capture
 
@@ -434,6 +453,10 @@ def workflow(session, mode, outcome):
                         if not all(750 <= (ch["frequency_hz"] or 0) <= 1250
                                    for ch in outcome["single_frozen"].values()):
                             raise RuntimeError("Frozen CSV captures do not match fixture periodicity")
+                        outcome["csv_vpp_crosscheck"] = {
+                            ch: math.isclose(outcome["running"]["channels"][ch]["vpp_v"], frozen["vpp_v"], rel_tol=.15)
+                            for ch, frozen in outcome["single_frozen"].items()
+                        }
                     break
             if not (outcome.get("single_frozen") or outcome.get("single_validation", {}).get("periodic_pair")):
                 raise RuntimeError("SINGLE stopped waveform unavailable or failed periodicity checks")
