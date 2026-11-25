@@ -25,6 +25,8 @@ These classifications may coexist. A tested predecessor can support reuse while 
 
 ## Acquisition
 
+**ACQ-10C supervised native adapter (HPA-P01/P03, HPA-A02/A03, HPA-S01, HPA-L01).** Offline adapter and simulated evidence for one exact S02 write under existing Windows ownership controls. ACQ-10B established that the firmware bounds returning write calls while device-side blocking and recovery remain unresolved. ADR-005 records the scoped risk acceptance process. [Supervised procedure](../protocol/NATIVE_WAVEFORM_ACQ10C.md) · [Proportionate qualification ADR](../adr/0005-proportionate-instrument-qualification.md)
+
 **ACQ-10A native waveform foundation (HPA-P01/P03, HPA-A02/A03, HPA-S02).** Offline source-4 S82 replay validates ordered waveform slots, exact counts and terminal framing. The version 1 host result preserves wire, scaling and measurement outcomes separately. Retained-firmware static dispatch matches the candidate grammar. Device-side buffer mutation, borrowed-buffer lifetime and writer progress keep native hardware qualification on HOLD. [Native waveform foundation](../protocol/NATIVE_WAVEFORM_ACQ10A.md)
 
 **ACQ-08B experimental guard (HPA-P01/P02/P03, HPA-S01/L01, HPA-A01/A03).** ACQ-08H passed one supervised sequential retrieval after one guard S92 and a fresh quiet interval on the pinned source and retained firmware. Strict silence remains the default. Acquisition coherence and unattended reliability remain unproven. [ACQ-08H result](../protocol/PAIRED_CSV_ACQ08B.md#acq-08h-supervised-hardware-result) · [Selective reuse ADR](../adr/0004-qualified-baseline-and-selective-reuse.md)
