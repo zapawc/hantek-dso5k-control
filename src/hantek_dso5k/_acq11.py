@@ -556,11 +556,12 @@ def workflow(session, mode, outcome):
             restore_settings(session, baseline, outcome)
 
 
-def run(evidence, source, mode, *, hold, claim, screen, marker):
+def run(evidence, source, mode, *, hold, claim, screen, marker, execute=workflow, operation="ACQ-11"):
     evidence = Path(evidence).resolve()
     guard = finalization_guard(marker)
     evidence.mkdir()
     outcome = {"session_id": uuid4().hex, "source_commit": source, "mode": mode,
+               "operation": operation,
                "status": "BLOCKED", "acquisition_outcome": "NOT_COMPLETED", "finalization": "NOT_STARTED",
                "marker": "NOT_CHECKED", "admission_guard": "NOT_CHECKED", "request_attempts": 0,
                "cleanup": {"lease_released": False, "interface_released": False}, "errors": []}
@@ -578,7 +579,7 @@ def run(evidence, source, mode, *, hold, claim, screen, marker):
             marker.parent.mkdir(parents=True, exist_ok=True)
             if evidence.stat().st_dev != marker.parent.stat().st_dev:
                 raise RuntimeError("Evidence must share the interruption-state volume")
-            marker_id = create_record(marker, {"session_id": outcome["session_id"], "operation": "ACQ-11",
+            marker_id = create_record(marker, {"session_id": outcome["session_id"], "operation": operation,
                                                "evidence": str(evidence), "source_commit": source, "utc": utc()})
             outcome.update(status="FAIL", marker="RETAINED", admission_guard="ABSENT")
             stage = "session"
@@ -587,7 +588,7 @@ def run(evidence, source, mode, *, hold, claim, screen, marker):
                     with record_cleanup(claim(), outcome["cleanup"], "interface_released") as link:
                         session = Session(link, evidence, journal)
                         session.startup()
-                        workflow(session, mode, outcome)
+                        execute(session, mode, outcome)
                 except (Exception, KeyboardInterrupt) as exc:
                     outcome["errors"].append({"stage": stage, "detail": str(exc), "type": type(exc).__name__})
                     outcome["acquisition_outcome"] = "FAIL"
