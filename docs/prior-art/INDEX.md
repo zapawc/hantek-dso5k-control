@@ -25,6 +25,8 @@ These classifications may coexist. A tested predecessor can support reuse while 
 
 ## Acquisition
 
+**ACQ-07 adapter candidate (HPA-P01/P02/P03, HPA-A01/A03, HPA-S01/L01).** Reuses ACQ-06 sequential timing and the existing Windows ownership and byte-transport stack. Passive preflight and synthetic tests cover the adapter. Same-session stability, S92 origin and acquisition coherence remain unverified. [ACQ-07 design and failure matrix](../protocol/PAIRED_CSV_ACQ07.md)
+
 **ACQ-05 proposed reuse (HPA-P01/P02/P03, HPA-A01/A03, HPA-S01, HPA-L01/L02):** Both bounded individual CH1 and CH2 S10 profiles have now been independently hardware-qualified. The offline pair-review candidate validates preserved transfer bytes, per-file manifests and hashes without asserting a common trigger. Live sequential two-file retrieval and acquisition coherence remain unqualified. See [ACQ-05 design and limits](../protocol/PAIRED_CSV_ACQ05.md).
 
 
