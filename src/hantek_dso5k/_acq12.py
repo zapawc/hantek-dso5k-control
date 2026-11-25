@@ -13,12 +13,27 @@ from ._settings import compare_settings
 ANALOG = {
     0: b"\x01", 1: b"\x07", 2: b"\x00", 5: b"\x00", 8: (-65).to_bytes(2, "little", signed=True),
     10: b"\x01", 11: b"\x09", 12: b"\x00", 15: b"\x00", 18: (-35).to_bytes(2, "little", signed=True),
-    160: b"\x12", 188: b"\x00",
 }
 DIAGNOSTIC = {**ANALOG, 21: b"\x00", 22: b"\x00", 23: b"\x00", 24: b"\x00", 59: b"\x00"}
 # Retained firmware normalized a Normal-mode S11 write to mode 0 while
 # stopped. Arm behavior in this mode must be demonstrated by the display.
-EXTERNAL = {**DIAGNOSTIC, 22: b"\x02", 25: b"\x0c\x00", 160: b"\x13"}
+EXTERNAL = {**DIAGNOSTIC, 22: b"\x02", 25: b"\x0c\x00"}
+
+
+def set_timebase(session, current, target):
+    """Use the SEC/DIV keys because S11 only updates the timebase readback."""
+    if current[188] != 0 or current[162] != 0 or current[160] not in range(15, 21) or target not in range(15, 21):
+        raise ValueError("ACQ-12 timebase keys require ordinary retained 4K mode and a reviewed timebase")
+    while current[160] != target:
+        direction = 1 if current[160] < target else -1
+        expected = current[160] + direction
+        key = 41 if direction == 1 else 40
+        ack = session.exchange("acq12_timebase_key", frame(0x13, bytes((key, 1))), 0x93, duration=1.4)
+        observed = session.settings("acq12_timebase_readback")
+        if len(ack) != 1 or observed[160] != expected:
+            raise RuntimeError("SEC/DIV key did not advance the reviewed timebase by one step")
+        current = observed
+    return current
 
 
 def patch_profile(raw, edits):
@@ -55,6 +70,7 @@ def restore(session, baseline, outcome, fields):
                 raise RuntimeError("Scope did not stop before settings restoration")
         previous_fields = {offset: baseline[offset:offset + len(value)] for offset, value in fields.items()}
         current = apply_profile(session, "acq12_restore_settings", current, previous_fields)
+        current = set_timebase(session, current, baseline[160])
         if _running(current) != _running(baseline):
             session.key("acq12_restore_run_state", RUN_STOP)
         final = session.settings("acq12_restored")

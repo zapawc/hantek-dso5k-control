@@ -10,7 +10,7 @@ from time import monotonic, sleep
 
 from fixture import command, decode_pulses, open_fixture
 from hantek_dso5k._acq11 import RUN_STOP, SINGLE, _running, describe, run
-from hantek_dso5k._acq12 import DIAGNOSTIC, EXTERNAL, apply_profile, restore, screen_status
+from hantek_dso5k._acq12 import DIAGNOSTIC, EXTERNAL, apply_profile, restore, screen_status, set_timebase
 from hantek_dso5k._host import assess_host, host_snapshot, lease
 from hantek_dso5k._pair_windows import _claim_pair, _source_commit
 from hantek_dso5k._session import state_path
@@ -79,10 +79,11 @@ def diagnostic(session, outcome, device, expected):
     idle = confirm_idle(device)
     if expected <= idle["last_accepted_id"]:
         raise RuntimeError("Select a new event ID above the fixture's latest accepted ID")
-    if baseline[171] or baseline[179] or baseline[185]:
+    if baseline[171] or baseline[179] or baseline[185] or baseline[188]:
         raise RuntimeError("Diagnostic requires ordinary YT sample mode with Math disabled")
     try:
         configured = apply_profile(session, "acq12_diagnostic_settings", baseline, DIAGNOSTIC)
+        configured = set_timebase(session, configured, 19)
         outcome["configured"] = describe(configured)
         session.key("acq12_run_for_diagnostic", RUN_STOP)
         running = session.settings("acq12_diagnostic_running")
@@ -106,7 +107,7 @@ def diagnostic(session, outcome, device, expected):
 def external(session, outcome, device, event_ids, ready_digest):
     baseline = session.settings("acq12_initial")
     outcome["initial"] = describe(baseline)
-    if _running(baseline) or baseline[171] or baseline[179] or baseline[185]:
+    if _running(baseline) or baseline[171] or baseline[179] or baseline[185] or baseline[188]:
         raise RuntimeError("Start in stopped ordinary YT sample mode with Math disabled")
     outcome["fixture"] = fixture_request(device, "INFO")
     idle = confirm_idle(device)
@@ -114,6 +115,7 @@ def external(session, outcome, device, event_ids, ready_digest):
         raise RuntimeError("Event IDs must increase past the fixture's last accepted ID")
     try:
         configured = apply_profile(session, "acq12_external_settings", baseline, EXTERNAL)
+        configured = set_timebase(session, configured, 19)
         outcome["configured"] = describe(configured)
         outcome["trials"] = trials = []
         for event_id in event_ids or [None]:
@@ -129,7 +131,7 @@ def external(session, outcome, device, event_ids, ready_digest):
             second = session.settings("acq12_after_arm_display")
             row["scope_states_before_event"] = [first[20], second[20]]
             waiting = first[20] == second[20] == 1
-            row["arm_ready"] = bool(waiting and ready_digest == digest)
+            row["arm_ready"] = bool(waiting and ready_digest == digest and display["aggregate"] == "PASS")
             if event_id is None:
                 row["no_trigger_observation"] = waiting
                 row["outcome"] = "no_trigger_timeout" if waiting else "premature_completion"

@@ -13,6 +13,8 @@ jobs:
           persist-credentials: false
       - name: Run offline suite with no USB dependencies
         run: PYTHONPATH=src python3 -B tests/run_offline.py
+      - name: Verify ESP8266 fixture event decoding offline
+        run: python3 -B -m unittest discover -s fixtures/esp8266-event-generator
   windows:
     name: Offline Windows PowerShell regressions
     runs-on: windows-2022
@@ -24,3 +26,5 @@ jobs:
       - name: Parse the host helper and run offline tests
         shell: powershell
         run: .\tests\Invoke-OfflineTests.ps1 -Repository . -Python (Get-Command python.exe -ErrorAction Stop).Source
+      - name: Verify ESP8266 fixture event decoding offline
+        run: python.exe -B -m unittest discover -s fixtures/esp8266-event-generator
