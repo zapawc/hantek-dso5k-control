@@ -535,7 +535,7 @@ class PairSessionTests(unittest.TestCase):
         from hantek_dso5k._pair_session import publish_file
 
         def publish(path, data, digest):
-            if path == self.specs[1].output:
+            if path.name == self.specs[1].output.name:
                 raise OSError("disk full")
             return publish_file(path, data, digest)
 
